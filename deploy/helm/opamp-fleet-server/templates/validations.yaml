@@ -1,0 +1,11 @@
+{{/*
+Fails the render outright rather than producing a chart that would let a
+compromised collector also authenticate to the REST API. See
+internal/config.Config's AgentAuthTokensFile/APIAuthTokensFile field
+comment in the source repo for the full rationale.
+*/}}
+{{- $agentSecret := include "opamp-fleet-server.agentTokensSecretName" . -}}
+{{- $apiSecret := include "opamp-fleet-server.apiTokensSecretName" . -}}
+{{- if eq $agentSecret $apiSecret -}}
+{{- fail (printf "auth.agentTokens and auth.apiTokens must resolve to different Secrets (both currently resolve to %q) -- a collector token must never also work against the REST API" $agentSecret) -}}
+{{- end -}}

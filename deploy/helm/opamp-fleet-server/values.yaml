@@ -1,0 +1,119 @@
+# Default values for opamp-fleet-server.
+#
+# Nothing in this chart creates a Role, RoleBinding, ClusterRole, or
+# ClusterRoleBinding, ever -- see docs/RBAC.md in the source repository.
+# The optional namespace-onboarding pattern described there is deliberately
+# NOT templated here: it's meant to be applied by other teams in their own
+# namespaces, independent of installing this chart.
+
+nameOverride: ""
+fullnameOverride: ""
+
+server:
+  image:
+    repository: REPLACE-WITH-YOUR-REGISTRY/opamp-fleet-server
+    tag: "" # defaults to .Chart.AppVersion
+    pullPolicy: IfNotPresent
+
+  # SQLite is single-writer: keep this at 1 (see README.md's scale-out
+  # note). The Deployment's update strategy is fixed to Recreate in the
+  # template for the same reason, regardless of this value.
+  replicaCount: 1
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+  # Maps directly to internal/config.Config.
+  opampListenPort: 4320
+  apiListenPort: 8080
+  staleAfter: "30s"
+  disconnectedAfter: "90s"
+  logLevel: "info"
+
+  serviceAccount:
+    create: true
+    name: ""
+    # Nothing is ever bound to this ServiceAccount by this chart -- see
+    # the top-of-file note. automountServiceAccountToken stays false
+    # because there is no use for a token at all.
+
+podAnnotations: {}
+podLabels: {}
+
+persistence:
+  # The SQLite fleet database (agent registry + config push history).
+  # Disabling this loses all history on pod restart -- fine for a
+  # throwaway/dev install, not for production.
+  enabled: true
+  size: 2Gi
+  storageClassName: "" # empty = cluster default
+  existingClaim: "" # set to reuse a PVC created outside this chart instead
+
+# Two SEPARATE token pools -- a collector must never also be able to
+# authenticate to the REST API and push config to every other agent in the
+# fleet (see internal/config.Config's AgentAuthTokensFile/APIAuthTokensFile
+# field comment in the source repo for the full rationale). The chart
+# refuses to render if both resolve to the same existingSecret name.
+#
+# For each pool, either:
+#   - set existingSecret to a Secret you created yourself (kubectl, External
+#     Secrets Operator, Sealed Secrets, ...) with a "tokens.txt" key -- the
+#     recommended path for anything beyond a quick try-out, since `tokens`
+#     below ends up in `helm get values` / your values file in plaintext, or
+#   - set `tokens` to a list of strings and let the chart create the Secret.
+auth:
+  agentTokens:
+    existingSecret: ""
+    existingSecretKey: tokens.txt
+    tokens: []
+  apiTokens:
+    existingSecret: ""
+    existingSecretKey: tokens.txt
+    tokens: []
+
+tls:
+  # Leave disabled to run plaintext behind a service mesh/ingress that
+  # already terminates TLS inside a trusted network boundary (the
+  # server-side default). Enabling this terminates TLS in the server
+  # process itself; existingSecret must be a kubernetes.io/tls Secret
+  # (e.g. one a cert-manager Certificate resource populates).
+  enabled: false
+  existingSecret: ""
+
+networkPolicy:
+  enabled: true
+  # Empty selector = ingress allowed from any namespace (the chart's
+  # default, matching that collectors/UI-consumers can live anywhere).
+  # Tighten by setting matchLabels once you've labeled the namespaces that
+  # should be allowed to reach this Service.
+  allowedNamespaceSelector: {}
+
+ui:
+  enabled: true
+  image:
+    repository: REPLACE-WITH-YOUR-REGISTRY/opamp-fleet-ui
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+  servicePort: 8081
+  # Only needed if the REST API is served from a different origin than
+  # this UI (separate hostnames rather than one ingress with path-based
+  # routing to each Service).
+  apiBaseUrl: ""
+  serviceAccount:
+    create: true
+    name: ""
+  networkPolicy:
+    enabled: true

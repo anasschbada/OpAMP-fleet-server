@@ -9,9 +9,10 @@ go install github.com/securego/gosec/v2/cmd/gosec@v2.22.5
 gosec ./...
 ```
 
-Résultat au moment de la livraison : **0 finding**, sur 22 fichiers /
-~2400 lignes. Deux catégories de problèmes ont été corrigées pendant le
-développement (pas juste ignorées) :
+Résultat au moment de la livraison : **0 finding**, sur 25 fichiers /
+~2900 lignes (hors fichiers `_test.go`, exclus par défaut par gosec). Deux
+catégories de problèmes ont été corrigées pendant le développement (pas
+juste ignorées) :
 
 - **G115** (conversion `uint64`→`int64` non bornée) sur
   `Health.StartTimeUnixNano`, une valeur rapportée par l'agent — donc non
@@ -22,7 +23,53 @@ développement (pas juste ignorées) :
   rendue explicite avec `_ = ...` plutôt que silencieuse.
 
 Ré-exécutez `gosec ./...` à chaque changement — idéalement comme étape de
-CI bloquante avant merge.
+CI bloquante avant merge (câblé dans `.github/workflows/ci.yml`).
+
+## Scan de secrets (gitleaks)
+
+Exécuté sur tout l'historique git (pas seulement l'état actuel) :
+
+```
+go install github.com/zricethezav/gitleaks/v8@v8.24.3
+gitleaks git --verbose
+```
+
+Résultat : **aucun leak trouvé**, sur les commits complets de
+l'historique. Complété par une recherche manuelle de motifs (clés privées,
+tokens AWS/GitHub/Slack, etc.) sur le code source et tous les fichiers
+`*secret*`/`*token*` du dépôt : seuls des exemples explicitement marqués
+`REPLACE-WITH-...` sont présents, jamais de valeur réelle.
+
+## Pentest manuel
+
+Le serveur a été démarré localement et attaqué directement (pas juste lu)
+avec les techniques suivantes, sur l'API REST, le endpoint OpAMP (transport
+WebSocket et HTTP-plain) et le serveur de fichiers statique de l'UI :
+
+| Technique | Résultat |
+|---|---|
+| Path traversal (`../`, encodage simple/double, octet nul) | Bloqué -- sauf un cas : voir ci-dessous |
+| Injection SQL via le paramètre `uid` (`' OR '1'='1`, `; DROP TABLE--`, `UNION SELECT`) | Neutralisé (requêtes paramétrées), table intacte après |
+| Injection CRLF dans l'en-tête `Authorization` | Rejeté par le parsing HTTP standard |
+| Corps de requête surdimensionné (>1 Mio) sur REST et sur le transport OpAMP HTTP-plain | 400, jamais de 500 ni d'épuisement mémoire |
+| Champ JSON inconnu dans le push de config | 400 (`DisallowUnknownFields`) |
+| YAML malformé dans le push de config | 400 avec message d'erreur explicite, jamais transmis au collecteur |
+| En-têtes CORS avec `Origin` arbitraire | Aucun header CORS renvoyé (pas d'accès cross-origin par défaut) |
+| Rafale d'échecs d'authentification (OpAMP et REST) | Throttling à 429 après le seuil configuré |
+| `/healthz` et `/readyz` sans authentification | Aucune fuite de données de flotte |
+
+**Une faille trouvée et corrigée** : un octet nul dans le chemin de l'URL
+servie par `cmd/fleet-ui-server` (`/index.html%00.png`) atteignait
+`http.FileServer` et remontait une **500 générique** au lieu d'un 404/400
+propre -- `os.Open` renvoie une erreur que `http.FileServer` ne reconnaît
+pas comme "fichier introuvable". Pas d'exploitation possible (aucun
+contenu de fichier exposé, aucun traversal réussi, pas de crash), mais un
+code d'erreur incorrect pour une entrée client malformée. Corrigé par
+`withRejectedControlChars` (rejette tout caractère de contrôle dans le
+chemin avec un 400 propre avant d'atteindre le serveur de fichiers),
+couvert par `cmd/fleet-ui-server/main_test.go`. À cette occasion, une
+absence de récupération de panique (`withRecover`) a aussi été ajoutée à
+ce serveur, qui ne l'avait jamais eue (contrairement à l'API REST).
 
 ## Analyse de vulnérabilités des dépendances (govulncheck)
 

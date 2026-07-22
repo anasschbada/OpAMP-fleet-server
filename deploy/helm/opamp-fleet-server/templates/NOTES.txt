@@ -1,0 +1,26 @@
+opamp-fleet-server has been installed.
+
+Server (OpAMP + REST API):
+  kubectl -n {{ .Release.Namespace }} get svc {{ include "opamp-fleet-server.fullname" . }}
+  OpAMP endpoint (for collector configs): ws://{{ include "opamp-fleet-server.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.opampListenPort }}/v1/opamp
+  REST API: http://{{ include "opamp-fleet-server.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.apiListenPort }}
+
+{{- if .Values.ui.enabled }}
+
+Fleet UI:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "opamp-fleet-server.ui.fullname" . }} 8081:{{ .Values.ui.servicePort }}
+  Then open http://localhost:8081 and enter one of your API tokens.
+{{- else }}
+
+UI disabled (ui.enabled=false) -- deploy it separately, or set ui.enabled=true and upgrade.
+{{- end }}
+
+Point your OpenTelemetry Collectors' opamp extension at the OpAMP endpoint
+above with a bearer token from your AGENT token pool (never the API pool)
+-- see deploy/k8s/collector-examples/ in the source repository for
+example collector manifests and why they need no Kubernetes RBAC either.
+
+Nothing this chart installed has a Role, RoleBinding, ClusterRole, or
+ClusterRoleBinding attached to it -- see docs/RBAC.md in the source
+repository for the full model and how to opt a namespace into the
+(currently unused) future read-only cross-check pattern, if you ever need it.

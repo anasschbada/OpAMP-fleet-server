@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "opamp-fleet-server.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "opamp-fleet-server.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "opamp-fleet-server.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: opamp
+      port: {{ .Values.server.opampListenPort }}
+      targetPort: opamp
+    - name: api
+      port: {{ .Values.server.apiListenPort }}
+      targetPort: api

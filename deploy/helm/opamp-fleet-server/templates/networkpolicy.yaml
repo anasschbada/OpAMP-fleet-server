@@ -1,0 +1,38 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "opamp-fleet-server.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "opamp-fleet-server.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "opamp-fleet-server.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.allowedNamespaceSelector | nindent 12 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.server.opampListenPort }}
+        - protocol: TCP
+          port: {{ .Values.server.apiListenPort }}
+  egress:
+    # DNS only by default. If you run collectors that advertise a
+    # self-metrics port (internal/metrics), you'll need to also allow
+    # egress on that port -- see deploy/k8s/platform/09-networkpolicy.yaml
+    # in the source repo for the full explanation of why this can't be
+    # scoped any tighter than "the whole cluster" for that one case.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{{- end }}

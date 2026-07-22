@@ -1,0 +1,35 @@
+# Keeps dependencies patched between manual reviews. Combined with CI's
+# govulncheck/npm-audit/trivy steps, this is what actually catches CVEs
+# disclosed after this code was written -- a one-time scan (like the one
+# in docs/SECURITY.md) only proves "clean at that moment," not "stays
+# clean."
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "npm"
+    directory: "/ui"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/ui"
+    schedule:
+      interval: "weekly"
+
+  # Also keeps GitHub Actions pinned versions current -- Dependabot bumps
+  # these as version-tag updates with a comment showing the resolved SHA,
+  # which is a meaningfully stronger supply-chain posture than floating
+  # tags left unmanaged.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

@@ -1,0 +1,215 @@
+name: CI
+
+# Runs on every push and PR. Nothing here pushes an image anywhere except
+# the optional `publish` job, which only runs on version tags and only if
+# the repo has GHCR access configured -- teams deploying into an airgapped
+# cluster build+push to their own internal registry out-of-band (see
+# Dockerfile/ui/Dockerfile header comments) and can ignore that job.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref instead of letting them pile up.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege default: individual jobs elevate only the specific
+# permission they need (e.g. `packages: write` in `publish`), everything
+# else stays read-only.
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.24"
+  NODE_VERSION: "22"
+
+jobs:
+  go:
+    name: Go build / vet / test / vuln scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: false
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt (fails if any file is unformatted)
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go test (race + coverage)
+        run: go test ./... -race -cover -coverprofile=coverage.out
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: coverage.out
+          retention-days: 14
+
+      - name: gosec (static security analysis)
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.22.5
+          gosec ./...
+
+      - name: govulncheck (known-vulnerability scan of dependencies)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: go mod verify
+        run: go mod verify
+
+  ui:
+    name: UI build / typecheck / audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: TypeScript typecheck
+        run: npx tsc -b
+
+      - name: npm run build
+        run: npm run build
+
+      - name: npm audit (fails on high/critical)
+        run: npm audit --audit-level=high
+
+  docker:
+    name: Docker image build (no push)
+    needs: [go, ui]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: opamp-fleet-server
+            dockerfile: Dockerfile
+          - name: opamp-fleet-ui
+            dockerfile: ui/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: false
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            REVISION=${{ github.sha }}
+          # Loads the built image into the local Docker daemon so Trivy can
+          # scan it in the next step, rather than just discarding it.
+          load: true
+          tags: ${{ matrix.name }}:ci
+
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ matrix.name }}:ci
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"
+          ignore-unfixed: true
+
+  k8s-manifests:
+    name: Validate Kubernetes manifests + Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install kubeconform
+        run: go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
+
+      - name: Validate raw manifests (deploy/k8s)
+        run: |
+          find deploy/k8s -name '*.yaml' -print0 \
+            | xargs -0 kubeconform -strict -ignore-missing-schemas -summary
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: "v3.16.4"
+
+      - name: helm lint
+        run: helm lint deploy/helm/opamp-fleet-server
+
+      - name: helm template + kubeconform
+        run: |
+          helm template test-release deploy/helm/opamp-fleet-server \
+            --set auth.agentTokens.tokens='{placeholder-agent-token}' \
+            --set auth.apiTokens.tokens='{placeholder-api-token}' \
+            | kubeconform -strict -ignore-missing-schemas -summary
+
+  # Builds and pushes to GitHub Container Registry, only on version tags.
+  # Entirely optional: skip/delete this job if you only ever build for an
+  # internal/airgapped registry (see Dockerfile header comments) -- nothing
+  # else in this workflow depends on it.
+  publish:
+    name: Publish images to GHCR
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [go, ui, docker, k8s-manifests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - name: opamp-fleet-server
+            dockerfile: Dockerfile
+          - name: opamp-fleet-ui
+            dockerfile: ui/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            REVISION=${{ github.sha }}
+          tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}:${{ github.ref_name }}

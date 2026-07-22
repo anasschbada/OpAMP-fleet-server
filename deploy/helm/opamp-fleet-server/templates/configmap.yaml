@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "opamp-fleet-server.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "opamp-fleet-server.labels" . | nindent 4 }}
+data:
+  OPAMP_LISTEN_ADDR: ":{{ .Values.server.opampListenPort }}"
+  API_LISTEN_ADDR: ":{{ .Values.server.apiListenPort }}"
+  DATA_DIR: "/data"
+  AGENT_AUTH_TOKENS_FILE: "/etc/opamp-server/agent-tokens/{{ .Values.auth.agentTokens.existingSecretKey }}"
+  API_AUTH_TOKENS_FILE: "/etc/opamp-server/api-tokens/{{ .Values.auth.apiTokens.existingSecretKey }}"
+  STALE_AFTER: {{ .Values.server.staleAfter | quote }}
+  DISCONNECTED_AFTER: {{ .Values.server.disconnectedAfter | quote }}
+  LOG_LEVEL: {{ .Values.server.logLevel | quote }}
+  {{- if .Values.tls.enabled }}
+  TLS_CERT_FILE: "/etc/opamp-server/tls/tls.crt"
+  TLS_KEY_FILE: "/etc/opamp-server/tls/tls.key"
+  {{- end }}

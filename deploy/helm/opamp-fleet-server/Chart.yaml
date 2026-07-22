@@ -1,0 +1,19 @@
+apiVersion: v2
+name: opamp-fleet-server
+description: >-
+  OpAMP protocol server + REST API + fleet UI for managing any
+  OpenTelemetry Collector distribution on Kubernetes, with zero
+  Kubernetes RBAC required by default (see docs/RBAC.md in the source repo).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - opentelemetry
+  - opamp
+  - observability
+  - collector
+home: https://github.com/anasschbada/opamp-fleet-server
+sources:
+  - https://github.com/anasschbada/opamp-fleet-server
+maintainers:
+  - name: opamp-fleet-server maintainers

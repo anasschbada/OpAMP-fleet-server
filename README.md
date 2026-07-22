@@ -33,11 +33,17 @@ Collecteurs OTel ──OpAMP/WebSocket:4320──► opamp-server ──REST:808
   session) mais reconnectée à une vraie API au lieu de données mockées.
 - **`deploy/k8s/`** : manifestes Kubernetes bruts (pas de Helm/Kustomize
   requis), voir plus bas.
+- **`deploy/helm/opamp-fleet-server/`** : chart Helm équivalent aux
+  manifestes bruts, voir plus bas.
+- **`.github/workflows/ci.yml`** : build/vet/test/gosec/govulncheck (Go),
+  build/typecheck/audit (UI), build d'image + scan Trivy, validation des
+  manifestes/chart avec kubeconform.
 - **`docs/RBAC.md`** : le modèle de permissions (aucun `ClusterRole`, opt-in
   par namespace).
-- **`docs/SECURITY.md`** : résultats des scans de sécurité (gosec, npm
-  audit) et ce qu'il reste à faire tourner en CI (govulncheck, scan
-  d'image).
+- **`docs/SECURITY.md`** : résultats des scans de sécurité (gosec,
+  gitleaks, npm audit, pentest manuel) et limites connues.
+- **`docs/PRODUCTION_READINESS.md`** : avis honnête sur ce qui est prêt
+  pour la prod et ce qui ne l'est pas encore.
 
 ## Comment les informations remontent
 
@@ -124,6 +130,21 @@ collecteurs, adaptez les manifestes dans
 particulier pourquoi c'est RBAC-free) — utilisez un jeton du fichier
 **agent** (`04-secret-agent-tokens.example.yaml`), jamais celui de l'API.
 
+## Déploiement avec Helm (alternative aux manifestes bruts)
+
+```bash
+helm install my-fleet ./deploy/helm/opamp-fleet-server \
+  --namespace opamp-system --create-namespace \
+  --set server.image.repository=YOUR_REGISTRY/opamp-fleet-server \
+  --set ui.image.repository=YOUR_REGISTRY/opamp-fleet-ui \
+  --set auth.agentTokens.existingSecret=my-agent-tokens \
+  --set auth.apiTokens.existingSecret=my-api-tokens
+```
+
+Voir `deploy/helm/opamp-fleet-server/README.md` pour le détail des valeurs
+et le garde-fou qui refuse le rendu si les deux pools de jetons pointent
+vers le même Secret.
+
 ## Sécurité : deux jetons, pas un seul
 
 Les collecteurs (canal OpAMP) et l'UI/les opérateurs (API REST) utilisent
@@ -140,14 +161,31 @@ Les tentatives d'authentification échouées (OpAMP et API) sont journalisées
 et limitées en débit par IP source (10 échecs/minute, au-delà : 429) — voir
 `internal/ratelimit`.
 
-## Tests / vérifications effectués
+## Tests / vérifications effectuées
 
 - `go build ./...`, `go vet ./...`, `gofmt -l .` : propre.
-- `gosec ./...` : 0 finding (voir `docs/SECURITY.md`).
+- `go test ./... -race -cover` : toute la suite passe (voir la couverture
+  par package en CI) — authentification, rate limiting, validation de
+  config, stockage (mémoire + SQLite via la même interface), parsing des
+  métriques, logique OpAMP.
+- `gosec ./...` : 0 finding.
+- `gitleaks git` sur tout l'historique : aucun secret trouvé.
 - `npm audit` (UI) : 0 vulnérabilité.
+- Pentest manuel : path traversal, injection SQL, injection CRLF, corps
+  surdimensionnés, YAML malformé, CORS, rate limiting — aucune faille
+  trouvée à part un bug mineur (500 au lieu de 400 sur un octet nul dans
+  une URL) déjà corrigé et couvert par un test de non-régression. Voir
+  `docs/SECURITY.md`.
+- `helm lint` + `helm template` + `kubeconform` sur le chart et les
+  manifestes bruts : tous valides.
 - Smoke test end-to-end du serveur (démarrage, `/healthz`, `/readyz`,
-  authentification REST, rejet WebSocket OpAMP non authentifié).
+  authentification REST, rejet WebSocket OpAMP non authentifié, séparation
+  des deux pools de jetons).
 - `npm run build` + `tsc -b` pour l'UI : propre.
+
+Voir `docs/PRODUCTION_READINESS.md` pour un avis honnête sur ce qui manque
+encore avant une prod à enjeux critiques (haute disponibilité, SSO, tests
+d'intégration bout-en-bout automatisés).
 
 ## Simplifications assumées par rapport au prototype de design d'origine
 

@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -51,11 +52,11 @@ func run() error {
 	// ServeMux (1.22+) already prefers the more specific pattern, but being
 	// explicit about ordering here avoids ever depending on that subtlety.
 	mux.HandleFunc("GET /config.js", handleConfigJS(apiBaseURL))
-	mux.Handle("/", withSecurityHeaders(apiOrigin, http.FileServer(http.Dir(dir))))
+	mux.Handle("/", withRejectedControlChars(withSecurityHeaders(apiOrigin, http.FileServer(http.Dir(dir)))))
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           withRecover(log, mux),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -63,6 +64,42 @@ func run() error {
 	}
 	log.Info("ui server started", "addr", addr, "static_dir", dir, "api_base_url", apiBaseURL)
 	return srv.ListenAndServe()
+}
+
+// withRecover turns a panic in any handler into a 500 without taking down
+// the process. Go's net/http already recovers panics per-request
+// internally, but silently (a bare stack trace to stderr, connection just
+// dropped); this gives it a proper structured log line and a clean
+// response instead.
+func withRecover(log *slog.Logger, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Error("panic recovered", "panic", rec, "path", r.URL.Path)
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withRejectedControlChars rejects any request path containing a null byte
+// or other control character with a clean 400 before it ever reaches
+// http.FileServer. Without this, a path like "/index.html%00.png" reaches
+// os.Open with an embedded NUL, which fails with an error http.FileServer
+// doesn't recognize as "not found" and surfaces as a bare 500 instead --
+// not a path-traversal risk (no file content is exposed either way, and
+// http.FileServer's own traversal protections are unaffected), just a
+// noisy, uninformative status code for what's actually a malformed
+// request.
+func withRejectedControlChars(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.ContainsFunc(r.URL.Path, func(c rune) bool { return c < 0x20 || c == 0x7f }) {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handleConfigJS serves the small runtime-config script index.html loads

@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "opamp-fleet-server.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "opamp-fleet-server.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.server.replicaCount }}
+  strategy:
+    # SQLite is single-writer; avoid two pods writing the same file at
+    # once during a rollout (see README.md's scale-out note).
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "opamp-fleet-server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "opamp-fleet-server.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "opamp-fleet-server.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: opamp-server
+          image: "{{ .Values.server.image.repository }}:{{ .Values.server.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.server.image.pullPolicy }}
+          ports:
+            - name: opamp
+              containerPort: {{ .Values.server.opampListenPort }}
+            - name: api
+              containerPort: {{ .Values.server.apiListenPort }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "opamp-fleet-server.fullname" . }}-config
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+            - name: agent-tokens
+              mountPath: /etc/opamp-server/agent-tokens
+              readOnly: true
+            - name: api-tokens
+              mountPath: /etc/opamp-server/api-tokens
+              readOnly: true
+            {{- if .Values.tls.enabled }}
+            - name: tls
+              mountPath: /etc/opamp-server/tls
+              readOnly: true
+            {{- end }}
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: api
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: api
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "opamp-fleet-server.fullname" .)) }}
+          {{- else }}
+          # persistence.enabled=false: the fleet database is lost on every
+          # pod restart (agent registry, config push history) -- fine for
+          # a throwaway/dev install, never for production.
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+        - name: agent-tokens
+          secret:
+            secretName: {{ include "opamp-fleet-server.agentTokensSecretName" . }}
+        - name: api-tokens
+          secret:
+            secretName: {{ include "opamp-fleet-server.apiTokensSecretName" . }}
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.existingSecret }}
+        {{- end }}
