@@ -1,0 +1,63 @@
+# Starter config for the cluster-level "gateway" collector role
+# (deployment-gateway.yaml): receives OTLP from the per-node agents and
+# forwards to your real observability backend. No host access, no
+# hostmetrics -- this role runs as an ordinary Deployment.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-gateway-config
+  namespace: <TEAM_NAMESPACE>
+data:
+  config.yaml: |
+    extensions:
+      opamp:
+        server:
+          ws:
+            endpoint: ws://opamp-server.<OPAMP_SERVER_NAMESPACE>.svc.cluster.local:4320/v1/opamp
+            headers:
+              Authorization: "Bearer ${env:OPAMP_AUTH_TOKEN}"
+        agent_description:
+          non_identifying_attributes:
+            opamp.fleetserver.self_metrics_port: "8888"
+        capabilities:
+          reports_effective_config: true
+          reports_health: true
+          reports_remote_config: true
+
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+          http:
+
+    processors:
+      resourcedetection:
+        detectors: [env]
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 1024
+      batch:
+        timeout: 5s
+
+    exporters:
+      otlphttp:
+        endpoint: https://REPLACE-WITH-YOUR-OBSERVABILITY-BACKEND
+
+    service:
+      extensions: [opamp]
+      telemetry:
+        metrics:
+          address: 0.0.0.0:8888
+      pipelines:
+        metrics:
+          receivers: [otlp]
+          processors: [resourcedetection, memory_limiter, batch]
+          exporters: [otlphttp]
+        logs:
+          receivers: [otlp]
+          processors: [resourcedetection, memory_limiter, batch]
+          exporters: [otlphttp]
+        traces:
+          receivers: [otlp]
+          processors: [resourcedetection, memory_limiter, batch]
+          exporters: [otlphttp]

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+    <title>OpAMP Fleet</title>
+    <!--
+      No external font CDN: this app must render correctly in an airgapped
+      cluster with no outbound internet access, so we use the OS/browser's
+      own UI and monospace font stacks (see styles.css) instead of fetching
+      IBM Plex from Google Fonts. Vendor the actual font files under
+      ui/public/fonts/ and add @font-face rules in styles.css if exact
+      visual fidelity to the original design matters more than that
+      constraint for your deployment.
+    -->
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

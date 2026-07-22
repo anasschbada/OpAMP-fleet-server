@@ -1,0 +1,17 @@
+# OPTIONAL / reference only.
+#
+# Creating a Namespace is a cluster-scoped operation and this project does
+# not assume you have that access (see docs/RBAC.md: no admin access, no
+# ClusterRole anywhere). If your platform team has already provisioned a
+# namespace for you, skip this file entirely and just point every other
+# manifest's `namespace:` field at the one you were given.
+#
+# Apply this yourself only if you (or someone with the right access) can
+# create namespaces:
+#   kubectl apply -f 00-namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opamp-system
+  labels:
+    app.kubernetes.io/name: opamp-fleet-server

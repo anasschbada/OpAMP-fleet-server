@@ -1,0 +1,18 @@
+# Persists the SQLite fleet database (agent registry + config push
+# history) across pod restarts. Uses the cluster's default StorageClass so
+# no admin action is needed beyond what any namespace member can already do
+# (creating a PVC is a namespaced, non-privileged operation).
+#
+# If your cluster has no default StorageClass, set storageClassName
+# explicitly to one your platform team has made available to you.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: opamp-server-data
+  namespace: opamp-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi

@@ -1,0 +1,52 @@
+# Default-deny-by-omission network policy for the server pod. NetworkPolicy
+# objects are namespaced resources -- creating these needs no more
+# privilege than any other manifest in this directory.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opamp-server
+  namespace: opamp-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: opamp-server
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Collectors live in whatever namespaces your platform has, and the UI
+    # may be consumed from yet another namespace/ingress -- so this allows
+    # ingress on both ports from anywhere in the cluster. If you know the
+    # exact set of namespaces that will ever run a collector or reach the
+    # API, replace `{}` with a namespaceSelector matching only those (label
+    # them first, e.g. `opamp-fleet-member: "true"`).
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 4320
+        - protocol: TCP
+          port: 8080
+  egress:
+    # DNS is always required (Service/Secret name resolution isn't
+    # involved here since we don't call the Kubernetes API, but the
+    # container's own runtime and libraries still resolve names, e.g. if
+    # your registry or TLS issuer setup does).
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Uncomment only if you run collectors that advertise a self-metrics
+    # port (see docs/RBAC.md's metrics scraping section / internal/metrics):
+    # the server calls back to the exact pod IP that already holds a live,
+    # authenticated OpAMP connection to it -- never an arbitrary address --
+    # but NetworkPolicy can't express "only IPs with an active inbound
+    # connection", so this has to open the whole cluster on that port.
+    # - to:
+    #     - namespaceSelector: {}
+    #   ports:
+    #     - protocol: TCP
+    #       port: 8888

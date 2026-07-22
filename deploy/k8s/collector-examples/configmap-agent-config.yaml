@@ -1,0 +1,90 @@
+# Starter config for the per-node "agent" collector role (daemonset-agent.yaml),
+# for any OTel Collector build with the opamp extension. Replace
+# <TEAM_NAMESPACE>, <OPAMP_SERVER_NAMESPACE>, and the exporter endpoint
+# before applying. See README.md in this directory for why this uses
+# `resourcedetection`'s `env` detector (fed by Downward API env vars set in
+# the Pod spec) instead of `k8sattributes`'s cluster-wide watch.
+#
+# For the cluster-level "gateway" role (no host access, aggregates what the
+# agents send), use configmap-gateway-config.yaml instead.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-agent-config
+  namespace: <TEAM_NAMESPACE>
+data:
+  config.yaml: |
+    extensions:
+      opamp:
+        server:
+          ws:
+            endpoint: ws://opamp-server.<OPAMP_SERVER_NAMESPACE>.svc.cluster.local:4320/v1/opamp
+            headers:
+              Authorization: "Bearer ${env:OPAMP_AUTH_TOKEN}"
+        # Non-identifying attribute this project's fleet server reads to
+        # know where to (optionally) scrape this collector's own metrics.
+        # Omit this block entirely to opt out of metrics scraping -- the
+        # server never scrapes an agent that doesn't advertise this.
+        agent_description:
+          non_identifying_attributes:
+            opamp.fleetserver.self_metrics_port: "8888"
+        capabilities:
+          reports_effective_config: true
+          reports_health: true
+          reports_remote_config: true
+
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+          http:
+      hostmetrics:
+        root_path: /hostfs
+        collection_interval: 30s
+        scrapers:
+          cpu:
+          memory:
+          disk:
+
+    processors:
+      # Reads OTEL_RESOURCE_ATTRIBUTES (set from Downward API fields in the
+      # Pod spec, see daemonset-agent.yaml/deployment-gateway.yaml) --
+      # zero Kubernetes API calls, so zero RBAC needed for this.
+      resourcedetection:
+        detectors: [env]
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 512
+      batch:
+        timeout: 5s
+
+    exporters:
+      # Forwards to the cluster-level "gateway" role (deployment-gateway.yaml
+      # + configmap-gateway-config.yaml), not straight to the observability
+      # backend -- that's the gateway's job. Adjust the service name if you
+      # named it differently.
+      otlp:
+        endpoint: otel-collector-gateway.<TEAM_NAMESPACE>.svc.cluster.local:4317
+        tls:
+          insecure: true # switch this to a real cert if the gateway terminates TLS
+
+    service:
+      extensions: [opamp]
+      # Exposes this collector's own operational metrics on :8888 in
+      # Prometheus text format -- what internal/metrics optionally scrapes.
+      telemetry:
+        metrics:
+          address: 0.0.0.0:8888
+      pipelines:
+        metrics:
+          receivers: [otlp, hostmetrics]
+          processors: [resourcedetection, memory_limiter, batch]
+          exporters: [otlp]
+        logs:
+          receivers: [otlp]
+          processors: [resourcedetection, memory_limiter, batch]
+          exporters: [otlp]
+        traces:
+          receivers: [otlp]
+          processors: [resourcedetection, memory_limiter, batch]
+          exporters: [otlp]

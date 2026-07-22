@@ -1,0 +1,85 @@
+# Cluster-level "gateway" collector role: aggregates what the per-node
+# agents send over OTLP, forwards to your observability backend. No host
+# access needed, so it can run fully sandboxed.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector-gateway
+  namespace: <TEAM_NAMESPACE>
+  labels:
+    app.kubernetes.io/name: otel-collector-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-collector-gateway
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: otelcol
+          image: REPLACE-WITH-YOUR-OTEL-COLLECTOR-IMAGE
+          args: ["--config=/etc/otelcol/config.yaml"]
+          env:
+            - name: K8S_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: K8S_POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: K8S_NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "k8s.namespace.name=$(K8S_NAMESPACE),k8s.pod.name=$(K8S_POD_NAME),k8s.node.name=$(K8S_NODE_NAME),collector.role=gateway"
+            - name: OPAMP_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: opamp-auth-token
+                  key: token
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: metrics
+              containerPort: 8888
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-gateway-config
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector-gateway
+  namespace: <TEAM_NAMESPACE>
+spec:
+  selector:
+    app.kubernetes.io/name: otel-collector-gateway
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc

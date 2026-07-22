@@ -1,0 +1,81 @@
+# Per-node "agent" collector role. Replace <TEAM_NAMESPACE> and the image
+# with your chosen OTel Collector distribution before applying.
+#
+# Kubernetes self-identification uses Downward API env vars folded into
+# OTEL_RESOURCE_ATTRIBUTES -- no Kubernetes API call, so no RBAC of any
+# kind is needed for this (see README.md in this directory).
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-collector-agent
+  namespace: <TEAM_NAMESPACE>
+  labels:
+    app.kubernetes.io/name: otel-collector-agent
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-collector-agent
+    spec:
+      # No serviceAccountName override: this pod uses the namespace's
+      # default ServiceAccount and needs no Kubernetes API permissions at
+      # all, so there is nothing to bind a Role to.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: otelcol
+          image: REPLACE-WITH-YOUR-OTEL-COLLECTOR-IMAGE # e.g. otel/opentelemetry-collector-contrib:<version>, or your org's distribution
+          args: ["--config=/etc/otelcol/config.yaml"]
+          env:
+            - name: K8S_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: K8S_POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: K8S_NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "k8s.namespace.name=$(K8S_NAMESPACE),k8s.pod.name=$(K8S_POD_NAME),k8s.node.name=$(K8S_NODE_NAME),collector.role=agent"
+            - name: OPAMP_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: opamp-auth-token
+                  key: token
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: metrics
+              containerPort: 8888
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol
+              readOnly: true
+            - name: hostfs
+              mountPath: /hostfs
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-agent-config
+        - name: hostfs
+          hostPath:
+            path: /
+        - name: tmp
+          emptyDir: {}

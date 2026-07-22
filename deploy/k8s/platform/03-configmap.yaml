@@ -1,0 +1,25 @@
+# Non-secret runtime settings, mapped 1:1 to internal/config.Config.
+# Secret values (auth tokens, TLS key) live in Secrets instead -- see
+# 04-secret-auth-tokens.example.yaml and 05-secret-tls.example.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opamp-server-config
+  namespace: opamp-system
+data:
+  OPAMP_LISTEN_ADDR: ":4320"
+  API_LISTEN_ADDR: ":8080"
+  DATA_DIR: "/data"
+  AUTH_TOKENS_FILE: "/etc/opamp-server/tokens/tokens.txt"
+  STALE_AFTER: "30s"
+  DISCONNECTED_AFTER: "90s"
+  LOG_LEVEL: "info"
+
+  # Leave both TLS_* variables unset here (as they are) to run the pod
+  # plaintext behind a service mesh/ingress that already terminates TLS
+  # inside a trusted network boundary. To terminate TLS in the server
+  # process itself instead, set these to the paths where
+  # 05-secret-tls.example.yaml is mounted and add the corresponding
+  # volume/volumeMount in 06-deployment.yaml.
+  # TLS_CERT_FILE: "/etc/opamp-server/tls/tls.crt"
+  # TLS_KEY_FILE: "/etc/opamp-server/tls/tls.key"

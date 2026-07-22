@@ -1,0 +1,99 @@
+# The OpAMP server itself. Security posture, top to bottom:
+#   - serviceAccountName has no Role/RoleBinding anywhere (see
+#     01-serviceaccount.yaml and docs/RBAC.md) -- zero Kubernetes API access.
+#   - runAsNonRoot + a fixed non-root UID/GID, readOnlyRootFilesystem,
+#     all Linux capabilities dropped, no privilege escalation, the
+#     default (runtime) seccomp profile.
+#   - Only /data (the PVC) and /tmp (scratch space SQLite needs even
+#     though the app itself writes nothing else to disk) are writable,
+#     both as explicit volumes -- everything else on the root filesystem
+#     is read-only.
+#   - Secrets are mounted read-only as files, never passed as env vars,
+#     so they don't show up in `kubectl describe pod` or process dumps.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opamp-server
+  namespace: opamp-system
+  labels:
+    app.kubernetes.io/name: opamp-server
+spec:
+  replicas: 1 # SQLite is single-writer; see README.md for the scale-out note
+  strategy:
+    type: Recreate # avoid two pods writing the same SQLite file at once during a rollout
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opamp-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opamp-server
+    spec:
+      serviceAccountName: opamp-server
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: opamp-server
+          image: REPLACE-WITH-YOUR-REGISTRY/opamp-fleet-server:latest # built from the top-level Dockerfile, pushed to your internal/airgapped registry
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: opamp
+              containerPort: 4320
+            - name: api
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: opamp-server-config
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+            - name: auth-tokens
+              mountPath: /etc/opamp-server/tokens
+              readOnly: true
+            # - name: tls
+            #   mountPath: /etc/opamp-server/tls
+            #   readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: api
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: api
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: opamp-server-data
+        - name: tmp
+          emptyDir: {}
+        - name: auth-tokens
+          secret:
+            secretName: opamp-server-auth-tokens
+        # - name: tls
+        #   secret:
+        #     secretName: opamp-server-tls

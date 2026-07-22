@@ -1,0 +1,42 @@
+# OPT-IN template -- apply this in a TEAM'S OWN namespace, not in
+# opamp-system. See docs/RBAC.md section 3 and README.md in this directory.
+#
+# Nothing in this file is cluster-scoped: both objects are namespaced, so
+# whoever already has edit/admin rights on <TEAM_NAMESPACE> (a normal app
+# team, no cluster-admin) can apply it themselves, for their own namespace
+# only. It grants the OpAMP server's ServiceAccount read-only access to
+# Pods and ConfigMaps in THIS namespace ONLY.
+#
+# The server ships with NO code that uses this today (see docs/RBAC.md
+# section 3) -- this template exists so a future, namespace-scoped
+# read-only feature has a permission pattern to onboard against without
+# ever needing a ClusterRole. Applying it today grants access that nothing
+# yet calls.
+#
+# Before applying, replace:
+#   <TEAM_NAMESPACE>            -- the namespace you are onboarding (also set as `namespace:` below)
+#   <OPAMP_SERVER_NAMESPACE>    -- the namespace the opamp-server Deployment runs in (e.g. opamp-system)
+#   <OPAMP_SERVER_SERVICEACCOUNT> -- the ServiceAccount name from deploy/k8s/platform/01-serviceaccount.yaml (opamp-server)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opamp-server-readonly
+  namespace: <TEAM_NAMESPACE>
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opamp-server-readonly
+  namespace: <TEAM_NAMESPACE>
+subjects:
+  - kind: ServiceAccount
+    name: <OPAMP_SERVER_SERVICEACCOUNT>
+    namespace: <OPAMP_SERVER_NAMESPACE>
+roleRef:
+  kind: Role
+  name: opamp-server-readonly
+  apiGroup: rbac.authorization.k8s.io

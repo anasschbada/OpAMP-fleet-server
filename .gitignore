@@ -1,0 +1,15 @@
+# Go
+/bin/
+*.exe
+
+# UI
+ui/node_modules/
+ui/dist/
+
+# Local dev artifacts
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.DS_Store
+ui/tsconfig.tsbuildinfo
