@@ -1,6 +1,7 @@
 # Non-secret runtime settings, mapped 1:1 to internal/config.Config.
 # Secret values (auth tokens, TLS key) live in Secrets instead -- see
-# 04-secret-auth-tokens.example.yaml and 05-secret-tls.example.yaml.
+# 04-secret-agent-tokens.example.yaml, 05-secret-api-tokens.example.yaml
+# and 06-secret-tls.example.yaml.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -10,7 +11,13 @@ data:
   OPAMP_LISTEN_ADDR: ":4320"
   API_LISTEN_ADDR: ":8080"
   DATA_DIR: "/data"
-  AUTH_TOKENS_FILE: "/etc/opamp-server/tokens/tokens.txt"
+
+  # Two SEPARATE token files, mounted from two separate Secrets (see
+  # 07-deployment.yaml). A collector's token must never also work against
+  # the REST API -- see internal/config.Config's field comment for why.
+  AGENT_AUTH_TOKENS_FILE: "/etc/opamp-server/agent-tokens/tokens.txt"
+  API_AUTH_TOKENS_FILE: "/etc/opamp-server/api-tokens/tokens.txt"
+
   STALE_AFTER: "30s"
   DISCONNECTED_AFTER: "90s"
   LOG_LEVEL: "info"
@@ -19,7 +26,7 @@ data:
   # plaintext behind a service mesh/ingress that already terminates TLS
   # inside a trusted network boundary. To terminate TLS in the server
   # process itself instead, set these to the paths where
-  # 05-secret-tls.example.yaml is mounted and add the corresponding
-  # volume/volumeMount in 06-deployment.yaml.
+  # 06-secret-tls.example.yaml is mounted and add the corresponding
+  # volume/volumeMount in 07-deployment.yaml.
   # TLS_CERT_FILE: "/etc/opamp-server/tls/tls.crt"
   # TLS_KEY_FILE: "/etc/opamp-server/tls/tls.key"

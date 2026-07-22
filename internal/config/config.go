@@ -30,14 +30,21 @@ type Config struct {
 	TLSCertFile string
 	TLSKeyFile  string
 
-	// AuthTokensFile points at the set of bearer tokens accepted from
-	// connecting agents AND from REST API callers (one per line).
-	// Supporting more than one token allows rotation without downtime (add
-	// the new token, roll agents, remove the old one). Loaded from a file
-	// so it can be mounted from a Kubernetes Secret and rotated without a
-	// pod restart: the server re-reads it periodically (see
+	// AgentAuthTokensFile and APIAuthTokensFile point at two SEPARATE sets
+	// of bearer tokens (one per line each): one accepted from connecting
+	// OpAMP agents, one accepted from REST API callers (the UI, or a human
+	// operator). Keeping them separate matters -- a collector only ever
+	// needs to prove it may open an OpAMP connection; it must NOT also be
+	// able to call the REST API and push configuration to every other
+	// agent in the fleet. If a single compromised collector pod held a
+	// token valid for both, that compromise would escalate into a
+	// fleet-wide config-injection primitive. Each file supports more than
+	// one token so it can be rotated without downtime (add the new token,
+	// roll the consumers, remove the old one); both are re-read
+	// periodically without a pod restart (see
 	// internal/auth.TokenVerifier.StartAutoReload).
-	AuthTokensFile string
+	AgentAuthTokensFile string
+	APIAuthTokensFile   string
 
 	// DataDir is where the SQLite database file lives. Must be a writable,
 	// persistent path (a PersistentVolumeClaim mount in Kubernetes).
@@ -59,13 +66,14 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 
 	cfg := Config{
-		OpAMPListenAddr: orDefault(getenv("OPAMP_LISTEN_ADDR"), ":4320"),
-		APIListenAddr:   orDefault(getenv("API_LISTEN_ADDR"), ":8080"),
-		TLSCertFile:     getenv("TLS_CERT_FILE"),
-		TLSKeyFile:      getenv("TLS_KEY_FILE"),
-		AuthTokensFile:  getenv("AUTH_TOKENS_FILE"),
-		DataDir:         orDefault(getenv("DATA_DIR"), "/data"),
-		LogLevel:        orDefault(getenv("LOG_LEVEL"), "info"),
+		OpAMPListenAddr:     orDefault(getenv("OPAMP_LISTEN_ADDR"), ":4320"),
+		APIListenAddr:       orDefault(getenv("API_LISTEN_ADDR"), ":8080"),
+		TLSCertFile:         getenv("TLS_CERT_FILE"),
+		TLSKeyFile:          getenv("TLS_KEY_FILE"),
+		AgentAuthTokensFile: getenv("AGENT_AUTH_TOKENS_FILE"),
+		APIAuthTokensFile:   getenv("API_AUTH_TOKENS_FILE"),
+		DataDir:             orDefault(getenv("DATA_DIR"), "/data"),
+		LogLevel:            orDefault(getenv("LOG_LEVEL"), "info"),
 	}
 
 	staleAfter, err := parseDurationOrDefault(getenv("STALE_AFTER"), 30*time.Second)
@@ -87,8 +95,15 @@ func Load(getenv func(string) string) (Config, error) {
 }
 
 func (c Config) validate() error {
-	if c.AuthTokensFile == "" {
-		return fmt.Errorf("AUTH_TOKENS_FILE must be set: refusing to start without agent/API authentication configured")
+	if c.AgentAuthTokensFile == "" {
+		return fmt.Errorf("AGENT_AUTH_TOKENS_FILE must be set: refusing to start without OpAMP agent authentication configured")
+	}
+	if c.APIAuthTokensFile == "" {
+		return fmt.Errorf("API_AUTH_TOKENS_FILE must be set: refusing to start without REST API authentication configured")
+	}
+	if c.AgentAuthTokensFile == c.APIAuthTokensFile {
+		return fmt.Errorf("AGENT_AUTH_TOKENS_FILE and API_AUTH_TOKENS_FILE must not be the same file: " +
+			"a compromised collector must not also hold a valid REST API token (see the field comment)")
 	}
 	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
 		return fmt.Errorf("TLS_CERT_FILE and TLS_KEY_FILE must both be set, or both left empty")

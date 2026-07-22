@@ -2,10 +2,12 @@ package api
 
 import (
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
 	"github.com/anasschbada/opamp-fleet-server/internal/auth"
+	"github.com/anasschbada/opamp-fleet-server/internal/ratelimit"
 )
 
 // withRecover turns a panic in any handler into a 500 response instead of
@@ -38,18 +40,49 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// withAuth requires a valid bearer token on every request. Health/readiness
-// endpoints are registered outside this middleware (see server.go) so
-// kubelet probes don't need a credential.
-func withAuth(tokens *auth.TokenVerifier, log *slog.Logger, next http.Handler) http.Handler {
+// withAuth requires a valid bearer token on every request, from the
+// API-scoped token set (never the OpAMP agent set -- see
+// internal/config's field comment for why the two must stay separate).
+// Health/readiness endpoints are registered outside this middleware (see
+// server.go) so kubelet probes don't need a credential.
+//
+// Repeated failed attempts from one source IP are throttled (429) before
+// the token is even checked, and every rejection is logged -- neither was
+// true before this was added, which meant credential-guessing against the
+// API left no trace and had no cost.
+func withAuth(tokens *auth.TokenVerifier, limiter *ratelimit.FailureLimiter, log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := clientIP(r)
+
+		if !limiter.Allow(ip) {
+			log.Warn("api request throttled: too many recent failed auth attempts", "remote_ip", ip, "path", r.URL.Path)
+			writeError(w, log, http.StatusTooManyRequests, "too many failed attempts, try again later", nil)
+			return
+		}
+
 		token := auth.BearerToken(r.Header.Get("Authorization"))
 		if !tokens.Verify(token) {
+			limiter.RecordFailure(ip)
+			log.Warn("api request rejected: invalid or missing bearer token", "remote_ip", ip, "path", r.URL.Path)
 			writeError(w, log, http.StatusUnauthorized, "unauthorized", nil)
 			return
 		}
+		limiter.RecordSuccess(ip)
 		next.ServeHTTP(w, r)
 	})
+}
+
+// clientIP extracts the request's direct TCP peer IP. Not
+// X-Forwarded-For: trusting a client-supplied header here would let any
+// caller spoof its rate-limit identity. If you place a reverse proxy in
+// front of this API, extend this to trust X-Forwarded-For only from that
+// proxy's known address.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // withLogging logs one line per request: method, path, status, duration.

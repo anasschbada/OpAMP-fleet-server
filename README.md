@@ -77,9 +77,11 @@ arbitraire (protection anti-SSRF, voir `internal/opampserver/registry.go`).
 ## Démarrage en local (développement)
 
 ```bash
-# Serveur
-export AUTH_TOKENS_FILE=/tmp/tokens.txt
-echo "dev-token" > /tmp/tokens.txt
+# Serveur -- deux fichiers de jetons SÉPARÉS (voir "Sécurité" plus bas)
+export AGENT_AUTH_TOKENS_FILE=/tmp/agent-tokens.txt
+export API_AUTH_TOKENS_FILE=/tmp/api-tokens.txt
+echo "dev-agent-token" > /tmp/agent-tokens.txt
+echo "dev-api-token" > /tmp/api-tokens.txt
 export DATA_DIR=/tmp/opamp-dev
 mkdir -p $DATA_DIR
 go run ./cmd/opamp-server
@@ -90,8 +92,8 @@ npm install
 npm run dev
 ```
 
-Ouvrez l'UI (URL affichée par `npm run dev`), entrez `dev-token` comme
-jeton d'accès.
+Ouvrez l'UI (URL affichée par `npm run dev`), entrez `dev-api-token` comme
+jeton d'accès (c'est le jeton API, pas le jeton agent — voir plus bas).
 
 ## Déploiement Kubernetes
 
@@ -99,11 +101,18 @@ jeton d'accès.
 kubectl apply -f deploy/k8s/platform/01-serviceaccount.yaml
 kubectl apply -f deploy/k8s/platform/02-pvc.yaml
 kubectl apply -f deploy/k8s/platform/03-configmap.yaml
-# Générez de vrais jetons avant d'appliquer -- voir le commentaire dans ce fichier :
-kubectl apply -f deploy/k8s/platform/04-secret-auth-tokens.example.yaml
-kubectl apply -f deploy/k8s/platform/06-deployment.yaml
-kubectl apply -f deploy/k8s/platform/07-service.yaml
-kubectl apply -f deploy/k8s/platform/08-networkpolicy.yaml
+# Générez de vrais jetons avant d'appliquer -- voir le commentaire dans chaque fichier :
+kubectl apply -f deploy/k8s/platform/04-secret-agent-tokens.example.yaml
+kubectl apply -f deploy/k8s/platform/05-secret-api-tokens.example.yaml
+kubectl apply -f deploy/k8s/platform/07-deployment.yaml
+kubectl apply -f deploy/k8s/platform/08-service.yaml
+kubectl apply -f deploy/k8s/platform/09-networkpolicy.yaml
+
+# L'UI (jamais déployée sans ça : cmd/fleet-ui-server a besoin de ces 3 manifestes)
+kubectl apply -f deploy/k8s/platform/10-ui-serviceaccount.yaml
+kubectl apply -f deploy/k8s/platform/11-ui-deployment.yaml
+kubectl apply -f deploy/k8s/platform/12-ui-service.yaml
+kubectl apply -f deploy/k8s/platform/13-ui-networkpolicy.yaml
 ```
 
 (`00-namespace.yaml` est optionnel — voir son commentaire si vous n'avez
@@ -112,7 +121,24 @@ pas le droit de créer des namespaces vous-même.)
 Puis, pour chaque namespace applicatif dont vous voulez piloter les
 collecteurs, adaptez les manifestes dans
 `deploy/k8s/collector-examples/` (voir son README pour le détail, en
-particulier pourquoi c'est RBAC-free).
+particulier pourquoi c'est RBAC-free) — utilisez un jeton du fichier
+**agent** (`04-secret-agent-tokens.example.yaml`), jamais celui de l'API.
+
+## Sécurité : deux jetons, pas un seul
+
+Les collecteurs (canal OpAMP) et l'UI/les opérateurs (API REST) utilisent
+**deux jeux de jetons séparés** (`AGENT_AUTH_TOKENS_FILE` /
+`API_AUTH_TOKENS_FILE`). Le serveur refuse de démarrer si les deux
+variables pointent vers le même fichier. Raison : un collecteur n'a besoin
+que d'ouvrir une connexion OpAMP — s'il partageait aussi le jeton API, un
+seul pod compromis pourrait pousser une configuration arbitraire vers
+*tous* les autres agents de la flotte via l'API REST. Voir le commentaire
+sur `AgentAuthTokensFile`/`APIAuthTokensFile` dans
+`internal/config/config.go`.
+
+Les tentatives d'authentification échouées (OpAMP et API) sont journalisées
+et limitées en débit par IP source (10 échecs/minute, au-delà : 429) — voir
+`internal/ratelimit`.
 
 ## Tests / vérifications effectués
 

@@ -67,6 +67,18 @@ func NewScraper(targets func() []opampserver.ScrapeTarget, store *Store, interva
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
+			Transport: &http.Transport{
+				// Go's default Transport transparently requests and
+				// decompresses gzip. The io.LimitReader below already
+				// bounds this safely (it wraps the decompressing reader,
+				// so it caps decompressed bytes actually read, not just
+				// the compressed wire size), but disabling compression
+				// outright removes the need to reason about that at all --
+				// this is a small, fixed self-telemetry payload with
+				// nothing to gain from compression, scraped from a target
+				// we don't fully trust.
+				DisableCompression: true,
+			},
 		},
 	}
 }

@@ -1,0 +1,28 @@
+# Unlike 09-networkpolicy.yaml (the main server), the UI needs NO egress
+# rule at all: cmd/fleet-ui-server never makes an outbound call (the
+# browser talks to the REST API directly, not this pod -- see
+# cmd/fleet-ui-server/main.go's header comment). Omitting an egress section
+# entirely, with Egress listed in policyTypes, means all egress from this
+# pod is denied by default.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opamp-fleet-ui
+  namespace: opamp-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: opamp-fleet-ui
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Wherever your browsers/ingress controller reach this Service from.
+    # Tighten with a namespaceSelector matching just your
+    # ingress-controller namespace if you know it.
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8081
+  egress: [] # intentionally empty: see header comment

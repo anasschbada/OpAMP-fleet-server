@@ -100,10 +100,81 @@ extension future.
 
 ## Authentification
 
-Un jeu de jetons bearer partagés (fichier monté depuis un Secret,
-rechargé périodiquement sans redémarrage — voir
-`internal/auth/tokens.go`), comparés en temps constant
-(`crypto/subtle.ConstantTimeCompare`) sur leur empreinte SHA-256 plutôt que
-la valeur brute. Ce n'est pas un système de comptes utilisateurs : voir la
-note dans `internal/api/agents.go` (`resolvePushedBy`) sur la limite
+Deux jeux de jetons bearer **séparés** — un pour les connexions OpAMP
+(collecteurs), un pour l'API REST (UI/opérateurs), voir
+`AgentAuthTokensFile`/`APIAuthTokensFile` dans `internal/config/config.go`.
+Le serveur refuse de démarrer si les deux pointent vers le même fichier.
+Cette séparation a été ajoutée après une première revue de sécurité de ce
+dépôt : dans la version initiale, un seul jeu de jetons servait aux deux
+canaux, ce qui voulait dire qu'un collecteur compromis — qui n'a besoin que
+d'un jeton pour ouvrir une connexion OpAMP — pouvait aussi appeler l'API
+REST et pousser une configuration arbitraire vers *tous* les autres agents
+de la flotte. C'était une élévation de privilèges réelle, maintenant
+fermée par construction (deux `TokenVerifier` distincts, chacun ne
+connaissant que son propre fichier).
+
+Chaque jeton est chargé depuis un fichier monté depuis un Secret, rechargé
+périodiquement sans redémarrage (`internal/auth/tokens.go`), comparé en
+temps constant (`crypto/subtle.ConstantTimeCompare`) sur son empreinte
+SHA-256 plutôt que sa valeur brute.
+
+Les tentatives échouées sont journalisées (jamais la valeur du jeton) et
+limitées en débit par IP source (`internal/ratelimit` :
+10 échecs/minute par défaut, au-delà : `429 Too Many Requests`, aussi bien
+côté OpAMP que côté API) — avant cette revue, un échec d'authentification
+était invisible et sans coût, ce qui rendait un brute-force silencieux et
+gratuit.
+
+Ce n'est toujours pas un système de comptes utilisateurs : voir la note
+dans `internal/api/agents.go` (`resolvePushedBy`) sur la limite
 d'imputabilité par utilisateur sans proxy d'authentification devant l'API.
+
+## Durcissement du listener OpAMP
+
+`opamp-go` (bibliothèque officielle utilisée pour le protocole) construit,
+via sa méthode `Server.Start()`, son propre `http.Server` interne **sans
+aucun `ReadHeaderTimeout`** (vérifié dans le source de la v0.23.0) — ce qui
+expose le listener OpAMP à une attaque de type slowloris. Ce projet
+n'utilise donc pas `Start()` : `internal/opampserver/httpserver.go` utilise
+`Server.Attach()` pour récupérer le handler et construit son propre
+`http.Server` avec `ReadHeaderTimeout` défini. Attention en y touchant :
+`ReadTimeout`/`WriteTimeout` ne sont volontairement PAS définis sur ce
+serveur, puisqu'ils s'appliqueraient à toute la durée de vie de la
+connexion — y compris après upgrade WebSocket — et couperaient de force
+chaque agent au bout du délai.
+
+Le transport HTTP-plain de secours d'OpAMP (agents qui n'utilisent pas de
+WebSocket) est borné à 1 Mio via `http.MaxBytesReader`
+(`maxPlainHTTPBodyBytes`).
+
+## Limite connue, non corrigeable sans forker `opamp-go`
+
+`opamp-go` v0.23.0 n'impose **aucune limite de taille** sur les messages
+WebSocket reçus (`wsConn.ReadMessage()` sans `SetReadLimit`), et
+n'expose aucun moyen de configurer cette limite depuis l'extérieur de la
+bibliothèque. Un agent qui détient un jeton valide (donc déjà un
+collecteur légitime ou compromis) pourrait en théorie envoyer un message
+excessivement volumineux et faire grossir la mémoire du serveur.
+
+Mitigation actuellement en place, suffisante mais pas idéale : la limite
+mémoire du pod (`resources.limits.memory: 512Mi` dans
+`deploy/k8s/platform/07-deployment.yaml`) — un abus se traduit par un
+`OOMKilled` et un redémarrage du pod, jamais par un impact au niveau du
+nœud ou du cluster. À faire si ce point devient critique pour vous :
+proposer un correctif à `open-telemetry/opamp-go` pour exposer
+`SetReadLimit`, ou forker le vendoring de la partie WebSocket.
+
+## Content-Security-Policy de l'UI et `style-src 'unsafe-inline'`
+
+`cmd/fleet-ui-server` sert la CSP la plus stricte possible sauf sur un
+point : `style-src` inclut `'unsafe-inline'`, nécessaire parce que les
+composants React (`ui/src/components/*.tsx`) utilisent largement des
+styles inline (`style={{...}}`) plutôt que des classes CSS. Sans ce
+relâchement, le navigateur bloquerait ces styles. Ce n'est pas un vecteur
+XSS en soi (aucune donnée utilisateur n'atteint ces attributs `style` --
+tout le rendu passe par JSX, qui échappe automatiquement), mais ça
+affaiblit la CSP par rapport à l'idéal (aucune exécution/injection inline
+d'aucune sorte). Correctif possible mais non fait ici (effort/bénéfice
+jugé faible face aux autres points) : migrer les styles inline vers des
+classes dans `ui/src/styles.css`, puis retirer `'unsafe-inline'` de
+`style-src` dans `cmd/fleet-ui-server/main.go`.

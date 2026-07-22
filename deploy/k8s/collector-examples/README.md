@@ -25,9 +25,13 @@ you actually run before copying this verbatim.
   role): receives from the per-node agents over OTLP, no host access
   needed.
 - `secret-opamp-auth.example.yaml` -- example Secret carrying the bearer
-  token collectors present to the fleet server (see
-  `deploy/k8s/platform/04-secret-auth-tokens.example.yaml` -- this must be
-  one of the same tokens the server accepts).
+  token collectors present to the fleet server. This must be one of the
+  tokens in the server's **agent** token pool
+  (`deploy/k8s/platform/04-secret-agent-tokens.example.yaml`) -- never a
+  token from the API pool (`05-secret-api-tokens.example.yaml`). The server
+  checks these against two separate lists; see
+  `internal/config/config.go`'s field comment for why collectors and the
+  UI/operators must never share a token.
 
 ## Why there's no Kubernetes RBAC here at all
 

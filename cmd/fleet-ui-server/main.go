@@ -12,8 +12,10 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 )
@@ -33,16 +35,23 @@ func run() error {
 
 	// If the API is served from a different origin than this UI (e.g.
 	// separate hostnames rather than one ingress with path-based routing),
-	// set API_ORIGIN to that origin so the CSP's connect-src allows the
-	// browser's fetch() calls to reach it. Leave unset when UI and API
-	// share an origin (the common case, and the default in
-	// ui/src/api/client.ts).
-	apiOrigin := os.Getenv("API_ORIGIN")
+	// set API_BASE_URL to that origin (e.g. "https://opamp-api.example.com").
+	// Leave unset when UI and API share an origin (the common case): the
+	// browser then calls same-origin relative paths, which is the default
+	// in ui/src/api/client.ts.
+	apiBaseURL := os.Getenv("API_BASE_URL")
+	apiOrigin, err := originOf(apiBaseURL)
+	if err != nil {
+		return fmt.Errorf("API_BASE_URL: %w", err)
+	}
 
-	fileServer := http.FileServer(http.Dir(dir))
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	mux.Handle("/", withSecurityHeaders(apiOrigin, fileServer))
+	// Must be registered before the "/" static file handler below: Go's
+	// ServeMux (1.22+) already prefers the more specific pattern, but being
+	// explicit about ordering here avoids ever depending on that subtlety.
+	mux.HandleFunc("GET /config.js", handleConfigJS(apiBaseURL))
+	mux.Handle("/", withSecurityHeaders(apiOrigin, http.FileServer(http.Dir(dir))))
 
 	srv := &http.Server{
 		Addr:              addr,
@@ -52,16 +61,44 @@ func run() error {
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	log.Info("ui server started", "addr", addr, "static_dir", dir)
+	log.Info("ui server started", "addr", addr, "static_dir", dir, "api_base_url", apiBaseURL)
 	return srv.ListenAndServe()
+}
+
+// handleConfigJS serves the small runtime-config script index.html loads
+// before the app bundle, so the API base URL can be set per-deployment
+// without rebuilding the UI image. Empty apiBaseURL still serves valid,
+// well-formed JS (an empty string), which ui/src/api/client.ts treats as
+// "same origin".
+func handleConfigJS(apiBaseURL string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store") // this value can change between deployments; never let the browser cache a stale one
+		fmt.Fprintf(w, "window.__OPAMP_CONFIG__ = { apiBaseUrl: %q };\n", apiBaseURL)
+	}
+}
+
+// originOf returns the scheme://host[:port] portion of rawURL, for use in
+// a Content-Security-Policy connect-src directive. Returns "" (meaning
+// "same-origin only") if rawURL is empty.
+func originOf(rawURL string) (string, error) {
+	if rawURL == "" {
+		return "", nil
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("must be an absolute URL with scheme and host, got %q", rawURL)
+	}
+	return u.Scheme + "://" + u.Host, nil
 }
 
 // withSecurityHeaders applies a strict baseline appropriate for a static
 // SPA: no inline script execution beyond what Vite's build emits as
-// external files, no framing by other origins, and connect-src left to
-// 'self' plus whatever API origin the deployment configures via
-// window.__OPAMP_CONFIG__ (see index.html) -- adjust connect-src below if
-// the API is served from a different origin than the UI.
+// external files, no framing by other origins, and connect-src limited to
+// 'self' plus whatever API origin API_BASE_URL configures.
 func withSecurityHeaders(apiOrigin string, next http.Handler) http.Handler {
 	connectSrc := "'self'"
 	if apiOrigin != "" {

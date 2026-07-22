@@ -15,6 +15,18 @@
       constraint for your deployment.
     -->
     <link rel="stylesheet" href="/src/styles.css" />
+    <!--
+      Served by cmd/fleet-ui-server in production (see its handleConfigJS),
+      not by Vite's dev server -- a 404 here during `npm run dev` is
+      expected and harmless (ui/src/api/client.ts falls back to same-origin
+      requests when window.__OPAMP_CONFIG__ is absent). Must load before
+      main.tsx so the API base URL is set before any fetch call runs.
+      `npm run build` logs a warning about this tag needing type="module"
+      to be bundled -- also harmless: this is intentionally NOT a module
+      and NOT meant to be bundled (it doesn't exist as a file at build
+      time), and `dist/index.html` still contains the tag unchanged.
+    -->
+    <script src="/config.js"></script>
   </head>
   <body>
     <div id="root"></div>

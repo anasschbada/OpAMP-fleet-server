@@ -17,8 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	opampsrv "github.com/open-telemetry/opamp-go/server"
-
 	"github.com/anasschbada/opamp-fleet-server/internal/api"
 	"github.com/anasschbada/opamp-fleet-server/internal/auth"
 	"github.com/anasschbada/opamp-fleet-server/internal/config"
@@ -27,8 +25,11 @@ import (
 	"github.com/anasschbada/opamp-fleet-server/internal/store"
 )
 
-const metricsScrapeInterval = 15 * time.Second
-const authTokenReloadInterval = 60 * time.Second
+const (
+	metricsScrapeInterval    = 15 * time.Second
+	authTokenReloadInterval  = 60 * time.Second
+	authLimiterCleanupPeriod = time.Minute
+)
 
 func main() {
 	if err := run(); err != nil {
@@ -46,9 +47,16 @@ func run() error {
 	log := newLogger(cfg.LogLevel)
 	slog.SetDefault(log)
 
-	tokens, err := auth.NewTokenVerifier(cfg.AuthTokensFile)
+	// Two SEPARATE token pools: a collector must never also be able to
+	// authenticate to the REST API and push config to other agents. See
+	// internal/config.Config's field comment for the full rationale.
+	agentTokens, err := auth.NewTokenVerifier(cfg.AgentAuthTokensFile)
 	if err != nil {
-		return fmt.Errorf("load auth tokens: %w", err)
+		return fmt.Errorf("load agent auth tokens: %w", err)
+	}
+	apiTokens, err := auth.NewTokenVerifier(cfg.APIAuthTokensFile)
+	if err != nil {
+		return fmt.Errorf("load api auth tokens: %w", err)
 	}
 
 	st, err := store.NewSQLiteStore(filepath.Join(cfg.DataDir, "fleet.db"))
@@ -72,30 +80,28 @@ func run() error {
 			"Only acceptable behind a TLS-terminating mesh/ingress inside a trusted network boundary.")
 	}
 
-	opampHandler := opampserver.NewHandler(st, tokens, log)
-	metricsStore := metrics.NewStore()
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	tokens.StartAutoReload(ctx, authTokenReloadInterval, log)
+	opampHandler := opampserver.NewHandler(st, agentTokens, log)
+	metricsStore := metrics.NewStore()
+
+	agentTokens.StartAutoReload(ctx, authTokenReloadInterval, log)
+	apiTokens.StartAutoReload(ctx, authTokenReloadInterval, log)
+	opampHandler.StartAuthLimiterCleanup(ctx, authLimiterCleanupPeriod)
 	go opampserver.RunStaleSweeper(ctx, st, cfg.StaleAfter, cfg.DisconnectedAfter, log)
 
 	scraper := metrics.NewScraper(opampHandler.ScrapeTargets, metricsStore, metricsScrapeInterval, log)
 	go scraper.Run(ctx)
 
-	opampServer := opampsrv.New(opampserver.NewLogAdapter(log))
-	startSettings := opampsrv.StartSettings{
-		Settings:       opampsrv.Settings{Callbacks: opampHandler.Callbacks()},
-		ListenEndpoint: cfg.OpAMPListenAddr,
-		TLSConfig:      tlsConfig,
+	opampHTTPServer, err := opampserver.NewHTTPServer(opampHandler, cfg.OpAMPListenAddr, tlsConfig, log)
+	if err != nil {
+		return fmt.Errorf("build opamp http server: %w", err)
 	}
-	if err := opampServer.Start(startSettings); err != nil {
-		return fmt.Errorf("start opamp listener on %s: %w", cfg.OpAMPListenAddr, err)
-	}
+	opampErrCh := serve(opampHTTPServer, tlsConfig != nil)
 	log.Info("opamp listener started", "addr", cfg.OpAMPListenAddr, "tls", tlsConfig != nil)
 
-	restHandler := api.NewHandler(st, opampHandler, metricsStore, tokens, log)
+	restHandler := api.NewHandler(ctx, st, opampHandler, metricsStore, apiTokens, log)
 	restServer := &http.Server{
 		Addr:              cfg.APIListenAddr,
 		Handler:           restHandler,
@@ -105,24 +111,16 @@ func run() error {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	restErrCh := make(chan error, 1)
-	go func() {
-		var err error
-		if tlsConfig != nil {
-			err = restServer.ListenAndServeTLS("", "")
-		} else {
-			err = restServer.ListenAndServe()
-		}
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			restErrCh <- err
-		}
-		close(restErrCh)
-	}()
+	restErrCh := serve(restServer, tlsConfig != nil)
 	log.Info("rest api listener started", "addr", cfg.APIListenAddr, "tls", tlsConfig != nil)
 
 	select {
 	case <-ctx.Done():
 		log.Info("shutdown signal received")
+	case err := <-opampErrCh:
+		if err != nil {
+			return fmt.Errorf("opamp listener failed: %w", err)
+		}
 	case err := <-restErrCh:
 		if err != nil {
 			return fmt.Errorf("rest api listener failed: %w", err)
@@ -135,10 +133,30 @@ func run() error {
 	if err := restServer.Shutdown(shutdownCtx); err != nil {
 		log.Error("rest api shutdown error", "error", err)
 	}
-	if err := opampServer.Stop(shutdownCtx); err != nil {
+	if err := opampHTTPServer.Shutdown(shutdownCtx); err != nil {
 		log.Error("opamp listener shutdown error", "error", err)
 	}
 	return nil
+}
+
+// serve starts srv in the background and reports any error other than the
+// expected "server closed" one on the returned channel (which is closed
+// once the server stops, whether cleanly or not).
+func serve(srv *http.Server, useTLS bool) <-chan error {
+	errCh := make(chan error, 1)
+	go func() {
+		var err error
+		if useTLS {
+			err = srv.ListenAndServeTLS("", "")
+		} else {
+			err = srv.ListenAndServe()
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+		close(errCh)
+	}()
+	return errCh
 }
 
 func newLogger(level string) *slog.Logger {

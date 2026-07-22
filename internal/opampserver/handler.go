@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"time"
 
@@ -23,7 +24,16 @@ import (
 	"github.com/open-telemetry/opamp-go/server/types"
 
 	"github.com/anasschbada/opamp-fleet-server/internal/auth"
+	"github.com/anasschbada/opamp-fleet-server/internal/ratelimit"
 	"github.com/anasschbada/opamp-fleet-server/internal/store"
+)
+
+// maxAuthFailures / authFailureWindow bound how many failed OpAMP
+// connection attempts one source IP gets before being throttled outright,
+// slowing down credential-guessing against the shared bearer tokens.
+const (
+	maxAuthFailures   = 10
+	authFailureWindow = time.Minute
 )
 
 // serverCapabilities declares what this server offers: it can accept status
@@ -39,14 +49,30 @@ const serverCapabilities = uint64(
 // Handler wires the OpAMP protocol callbacks to the fleet Store. One Handler
 // instance is shared by every agent connection.
 type Handler struct {
-	store  store.Store
-	tokens *auth.TokenVerifier
-	conns  *connRegistry
-	log    *slog.Logger
+	store       store.Store
+	agentTokens *auth.TokenVerifier // scoped to OpAMP connections only -- see internal/config's field comment for why this must differ from the REST API's token set
+	conns       *connRegistry
+	authLimiter *ratelimit.FailureLimiter
+	log         *slog.Logger
 }
 
-func NewHandler(st store.Store, tokens *auth.TokenVerifier, log *slog.Logger) *Handler {
-	return &Handler{store: st, tokens: tokens, conns: newConnRegistry(), log: log}
+// NewHandler wires a Handler. agentTokens must be the agent-scoped token
+// set (internal/config.Config.AgentAuthTokensFile), never the REST API's.
+func NewHandler(st store.Store, agentTokens *auth.TokenVerifier, log *slog.Logger) *Handler {
+	return &Handler{
+		store:       st,
+		agentTokens: agentTokens,
+		conns:       newConnRegistry(),
+		authLimiter: ratelimit.NewFailureLimiter(maxAuthFailures, authFailureWindow),
+		log:         log,
+	}
+}
+
+// StartAuthLimiterCleanup evicts idle rate-limit tracking entries
+// periodically so memory use doesn't grow with the number of distinct
+// source IPs seen over the process lifetime. Call once at startup.
+func (h *Handler) StartAuthLimiterCleanup(ctx context.Context, interval time.Duration) {
+	h.authLimiter.StartCleanup(ctx, interval)
 }
 
 // Callbacks returns the opamp-go server.Settings.Callbacks wired to this
@@ -69,13 +95,27 @@ func (h *Handler) ScrapeTargets() []ScrapeTarget {
 
 // onConnecting authenticates the incoming connection before any OpAMP
 // message is processed. OpAMP itself has no built-in authentication, so
-// every collector must present the shared bearer token issued to this
-// cluster (see docs/RBAC.md and deploy/k8s/platform/auth-tokens-secret.example.yaml).
+// every collector must present a bearer token from the agent-scoped token
+// set (see docs/RBAC.md and
+// deploy/k8s/platform/04-secret-agent-tokens.example.yaml) -- never the
+// REST API's token set, which must remain a separate pool (see
+// internal/config's field comment for why).
 func (h *Handler) onConnecting(req *http.Request) types.ConnectionResponse {
+	remoteIP := clientIP(req)
+
+	if !h.authLimiter.Allow(remoteIP) {
+		h.log.Warn("opamp connection throttled: too many recent failed auth attempts", "remote_ip", remoteIP)
+		return types.ConnectionResponse{Accept: false, HTTPStatusCode: http.StatusTooManyRequests}
+	}
+
 	token := auth.BearerToken(req.Header.Get("Authorization"))
-	if !h.tokens.Verify(token) {
+	if !h.agentTokens.Verify(token) {
+		h.authLimiter.RecordFailure(remoteIP)
+		h.log.Warn("opamp connection rejected: invalid or missing bearer token", "remote_ip", remoteIP)
 		return types.ConnectionResponse{Accept: false, HTTPStatusCode: http.StatusUnauthorized}
 	}
+	h.authLimiter.RecordSuccess(remoteIP)
+
 	return types.ConnectionResponse{
 		Accept: true,
 		ConnectionCallbacks: types.ConnectionCallbacks{
@@ -86,6 +126,21 @@ func (h *Handler) onConnecting(req *http.Request) types.ConnectionResponse {
 			OnMessageResponseError: h.onMessageResponseError,
 		},
 	}
+}
+
+// clientIP extracts the request's source IP for rate-limiting purposes.
+// This is the direct TCP peer, not an X-Forwarded-For header: OpAMP
+// connections come straight from collector pods with no reverse proxy in
+// front of this port in the deployment this project ships (see
+// deploy/k8s/platform/09-networkpolicy.yaml), and trusting a
+// client-supplied header here would let any agent spoof its rate-limit
+// identity.
+func clientIP(req *http.Request) string {
+	host, _, err := net.SplitHostPort(req.RemoteAddr)
+	if err != nil {
+		return req.RemoteAddr
+	}
+	return host
 }
 
 func (h *Handler) onConnected(ctx context.Context, conn types.Connection) {

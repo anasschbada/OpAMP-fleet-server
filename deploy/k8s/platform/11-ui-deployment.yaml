@@ -1,0 +1,70 @@
+# The fleet UI (cmd/fleet-ui-server serving ui/dist). Same hardening
+# posture as 07-deployment.yaml, but simpler: this process makes no
+# outbound calls at all (the browser talks to the REST API directly), so
+# it needs no ConfigMap/Secret beyond an optional API_BASE_URL when the API
+# is on a different origin (see cmd/fleet-ui-server/main.go and
+# 12-networkpolicy.yaml's note on egress).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opamp-fleet-ui
+  namespace: opamp-system
+  labels:
+    app.kubernetes.io/name: opamp-fleet-ui
+spec:
+  replicas: 2 # stateless static file server -- unlike the main server, safe to run more than one
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opamp-fleet-ui
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opamp-fleet-ui
+    spec:
+      serviceAccountName: opamp-fleet-ui
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: fleet-ui
+          image: REPLACE-WITH-YOUR-REGISTRY/opamp-fleet-ui:latest # built from ui/Dockerfile (context = repo root), pushed to your internal/airgapped registry
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8081
+          env:
+            - name: UI_LISTEN_ADDR
+              value: ":8081"
+            # Only needed if the REST API is served from a different origin
+            # than this UI. Leave unset when both share an origin (e.g. one
+            # ingress with path-based routing to each Service).
+            # - name: API_BASE_URL
+            #   value: "https://opamp-api.example.com"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10

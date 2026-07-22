@@ -102,10 +102,10 @@ indisponible ici", jamais comme une erreur fatale.
 
 | Fichier | Contenu | Scope RBAC |
 |---|---|---|
-| `serviceaccount.yaml` | ServiceAccount du serveur | aucun (pas de droit par défaut) |
-| `role-selfcheck.yaml` | Role optionnel, namespace du serveur uniquement (lecture de ses propres ConfigMaps/Secrets pour healthcheck de conf) | Role namespaced |
-| `rolebinding-selfcheck.yaml` | Lie le Role ci-dessus à la SA, même namespace | RoleBinding namespaced |
-| — | **Aucun `ClusterRole`, aucun `ClusterRoleBinding`, nulle part dans ce dépôt.** | — |
+| `01-serviceaccount.yaml` | ServiceAccount du serveur OpAMP | aucun (`automountServiceAccountToken: false`, pas de Role/RoleBinding) |
+| `10-ui-serviceaccount.yaml` | ServiceAccount de l'UI | aucun, idem |
+| `07-deployment.yaml`, `11-ui-deployment.yaml` | Les deux workloads | référencent leur ServiceAccount respective, aucune n'a de droit |
+| — | **Aucun `ClusterRole`, aucun `ClusterRoleBinding`, aucun `Role`, aucun `RoleBinding` nulle part dans ce dépôt.** Le patron de la section 3 n'est qu'un modèle documenté pour un besoin futur — rien à côté ne l'active aujourd'hui. | — |
 
 ## 5. Résumé pour un audit sécurité
 

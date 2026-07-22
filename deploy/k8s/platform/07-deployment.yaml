@@ -60,8 +60,11 @@ spec:
               mountPath: /data
             - name: tmp
               mountPath: /tmp
-            - name: auth-tokens
-              mountPath: /etc/opamp-server/tokens
+            - name: agent-tokens
+              mountPath: /etc/opamp-server/agent-tokens
+              readOnly: true
+            - name: api-tokens
+              mountPath: /etc/opamp-server/api-tokens
               readOnly: true
             # - name: tls
             #   mountPath: /etc/opamp-server/tls
@@ -91,9 +94,12 @@ spec:
             claimName: opamp-server-data
         - name: tmp
           emptyDir: {}
-        - name: auth-tokens
+        - name: agent-tokens
           secret:
-            secretName: opamp-server-auth-tokens
+            secretName: opamp-server-agent-tokens
+        - name: api-tokens
+          secret:
+            secretName: opamp-server-api-tokens
         # - name: tls
         #   secret:
         #     secretName: opamp-server-tls
