@@ -24,7 +24,10 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.24"
+  # 1.24's latest patch (1.24.13) has several stdlib CVEs (crypto/tls,
+  # net/http, net/url, os, crypto/x509) already fixed in 1.25.8+ -- pinning
+  # to the 1.25 line keeps `govulncheck` (and the shipped binaries) clean.
+  GO_VERSION: "1.25"
   NODE_VERSION: "22"
 
 jobs:
