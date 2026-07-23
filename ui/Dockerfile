@@ -10,7 +10,7 @@
 #   docker build -f ui/Dockerfile -t opamp-fleet-ui:latest .
 
 ARG NODE_IMAGE=node:22-bookworm
-ARG GO_IMAGE=golang:1.24-bookworm
+ARG GO_IMAGE=golang:1.25-bookworm
 
 FROM ${NODE_IMAGE} AS build-ui
 WORKDIR /src/ui

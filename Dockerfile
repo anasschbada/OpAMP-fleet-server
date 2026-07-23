@@ -15,7 +15,7 @@
 # A Docker-level HEALTHCHECK would need a shell/curl binary anyway, neither
 # of which exists on the distroless runtime image below.
 
-ARG GO_IMAGE=golang:1.24-bookworm
+ARG GO_IMAGE=golang:1.25-bookworm
 
 FROM ${GO_IMAGE} AS build
 WORKDIR /src
