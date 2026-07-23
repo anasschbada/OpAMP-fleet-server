@@ -1,0 +1,44 @@
+# Publishes deploy/helm/opamp-fleet-server as a GitHub Release whenever its
+# version is bumped on main. Uses helm/chart-releaser (the standard tool
+# for this): packages the chart into a .tgz, creates a GitHub Release named
+# "opamp-fleet-server-<Chart.yaml version>" with the .tgz attached, and
+# maintains a Helm repo index (index.yaml) on the gh-pages branch so the
+# chart can also be installed via `helm repo add`. Releases are skipped
+# automatically if the current chart version was already released.
+#
+# To publish a new chart version: bump `version:` in
+# deploy/helm/opamp-fleet-server/Chart.yaml and push to main.
+name: Release Helm chart
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/helm/**"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: "v3.16.4"
+
+      - name: Run chart-releaser
+        uses: helm/chart-releaser-action@v1.6.0
+        with:
+          charts_dir: deploy/helm
+        env:
+          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
