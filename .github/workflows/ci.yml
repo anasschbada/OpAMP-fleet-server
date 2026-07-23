@@ -1,10 +1,10 @@
 name: CI
 
 # Runs on every push and PR. Nothing here pushes an image anywhere except
-# the optional `publish` job, which only runs on version tags and only if
-# the repo has GHCR access configured -- teams deploying into an airgapped
+# the optional `publish` (GHCR) and `publish-dockerhub` (Docker Hub) jobs,
+# which only run on version tags -- teams deploying into an airgapped
 # cluster build+push to their own internal registry out-of-band (see
-# Dockerfile/ui/Dockerfile header comments) and can ignore that job.
+# Dockerfile/ui/Dockerfile header comments) and can ignore those jobs.
 on:
   push:
     branches: [main]
@@ -213,3 +213,43 @@ jobs:
             VERSION=${{ github.ref_name }}
             REVISION=${{ github.sha }}
           tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}:${{ github.ref_name }}
+
+  # Builds and pushes to Docker Hub, only on version tags. Needs the repo
+  # secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (a Docker Hub access
+  # token, not your account password) set under Settings > Secrets and
+  # variables > Actions. Skip/delete this job if you don't use Docker Hub.
+  publish-dockerhub:
+    name: Publish images to Docker Hub
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [go, ui, docker, k8s-manifests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - name: opamp-fleet-server
+            dockerfile: Dockerfile
+          - name: opamp-fleet-ui
+            dockerfile: ui/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            REVISION=${{ github.sha }}
+          tags: |
+            anasschb/images:${{ matrix.name }}-${{ github.ref_name }}
+            anasschb/images:${{ matrix.name }}-latest
