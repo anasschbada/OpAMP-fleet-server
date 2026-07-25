@@ -94,3 +94,7 @@ in secret-agent-tokens.yaml/secret-api-tokens.yaml.
 {{- define "opamp-fleet-server.apiTokensSecretName" -}}
 {{- .Values.auth.apiTokens.existingSecret | default (printf "%s-api-tokens" (include "opamp-fleet-server.fullname" .)) -}}
 {{- end -}}
+
+{{- define "opamp-fleet-server.basicAuthSecretName" -}}
+{{- .Values.auth.basicAuth.existingSecret | default (printf "%s-basic-auth" (include "opamp-fleet-server.fullname" .)) -}}
+{{- end -}}

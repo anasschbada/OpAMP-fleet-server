@@ -17,13 +17,19 @@ export interface FleetData {
 // Centralized here instead of each view fetching independently -- with a
 // sidebar badge now reading the same data as the page content, duplicate
 // pollers would drift out of sync with each other between ticks.
-export function useFleetData(): FleetData {
+//
+// enabled gates the whole hook: App.tsx calls this unconditionally (hooks
+// can't be called conditionally), but must pass `authed` through here so
+// polling doesn't start -- and doesn't fire one doomed, credential-less
+// request -- before the operator has actually logged in.
+export function useFleetData(enabled: boolean): FleetData {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [namespaces, setNamespaces] = useState<NamespaceSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
 
     async function load() {
@@ -46,7 +52,7 @@ export function useFleetData(): FleetData {
       cancelled = true;
       clearInterval(id);
     };
-  }, []);
+  }, [enabled]);
 
   return { agents, namespaces, loading, error };
 }

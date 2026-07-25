@@ -60,12 +60,21 @@ persistence:
 # field comment in the source repo for the full rationale). The chart
 # refuses to render if both resolve to the same existingSecret name.
 #
-# For each pool, either:
-#   - set existingSecret to a Secret you created yourself (kubectl, External
-#     Secrets Operator, Sealed Secrets, ...) with a "tokens.txt" key -- the
-#     recommended path for anything beyond a quick try-out, since `tokens`
-#     below ends up in `helm get values` / your values file in plaintext, or
-#   - set `tokens` to a list of strings and let the chart create the Secret.
+# For each pool, in order of precedence:
+#   1. existingSecret: point at a Secret you created yourself (kubectl,
+#      External Secrets Operator, Sealed Secrets, ...) with a "tokens.txt"
+#      key -- the recommended path for anything beyond a quick try-out,
+#      since `tokens` below ends up in `helm get values`/your values file
+#      in plaintext.
+#   2. tokens: a list of strings -- the chart creates the Secret from them.
+#   3. Neither set (the default): the chart GENERATES one random 40-char
+#      token itself and stores it in a Secret it manages
+#      (<release>-agent-tokens / <release>-api-tokens). The generated value
+#      is printed by `helm install`/`helm upgrade` in the post-install
+#      notes, and stays stable across upgrades (re-used via `lookup`,
+#      never rotated silently) -- see secret-agent-tokens.yaml's comment.
+#      Retrieve it any time with:
+#        kubectl get secret <release>-agent-tokens -n <namespace> -o jsonpath='{.data.tokens\.txt}' | base64 -d
 auth:
   agentTokens:
     existingSecret: ""
@@ -75,6 +84,20 @@ auth:
     existingSecret: ""
     existingSecretKey: tokens.txt
     tokens: []
+  # Optional, additive login method for the REST API/UI: a caller may
+  # present either a valid API token above OR this HTTP Basic Auth
+  # username/password. Disabled by default (enabled: false). The password
+  # follows the exact same existingSecret / explicit value / auto-generated
+  # precedence as the token pools above; the username is NOT auto-generated
+  # (a random username would be unusable to log in with) -- it defaults to
+  # "admin" unless you set one.
+  basicAuth:
+    enabled: false
+    existingSecret: ""
+    existingSecretUsernameKey: username
+    existingSecretPasswordKey: password
+    username: admin
+    password: ""
 
 tls:
   # Leave disabled to run plaintext behind a service mesh/ingress that
@@ -117,3 +140,36 @@ ui:
     name: ""
   networkPolicy:
     enabled: true
+
+# Arbitrary extra manifests rendered as part of this release -- e.g. an
+# Ingress/IngressRoute in front of the server/UI Services (this chart
+# deliberately doesn't template one, see README.md), a PrometheusRule, or
+# anything else specific to your cluster. Each entry is passed through
+# `tpl`, so it can use chart values/helpers just like the chart's own
+# templates, e.g.:
+#
+# extraManifests:
+#   - apiVersion: networking.k8s.io/v1
+#     kind: Ingress
+#     metadata:
+#       name: '{{ include "opamp-fleet-server.fullname" . }}'
+#       annotations:
+#         nginx.ingress.kubernetes.io/rewrite-target: /
+#     spec:
+#       rules:
+#         - host: opamp.example.com
+#           http:
+#             paths:
+#               - path: /api
+#                 pathType: Prefix
+#                 backend:
+#                   service:
+#                     name: '{{ include "opamp-fleet-server.fullname" . }}'
+#                     port: { number: 8080 }
+#               - path: /
+#                 pathType: Prefix
+#                 backend:
+#                   service:
+#                     name: '{{ include "opamp-fleet-server.ui.fullname" . }}'
+#                     port: { number: 8081 }
+extraManifests: []

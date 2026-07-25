@@ -18,6 +18,13 @@ data:
   AGENT_AUTH_TOKENS_FILE: "/etc/opamp-server/agent-tokens/tokens.txt"
   API_AUTH_TOKENS_FILE: "/etc/opamp-server/api-tokens/tokens.txt"
 
+  # Optional, additive: lets a REST API/UI caller log in with HTTP Basic
+  # Auth instead of an API token (never instead of the agent token above).
+  # Uncomment both together and add 14-secret-basicauth.example.yaml's
+  # volume/volumeMount in 07-deployment.yaml to enable.
+  # BASIC_AUTH_USERNAME_FILE: "/etc/opamp-server/basic-auth/username"
+  # BASIC_AUTH_PASSWORD_FILE: "/etc/opamp-server/basic-auth/password"
+
   STALE_AFTER: "30s"
   DISCONNECTED_AFTER: "90s"
   LOG_LEVEL: "info"

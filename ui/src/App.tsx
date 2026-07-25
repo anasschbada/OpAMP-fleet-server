@@ -6,7 +6,7 @@ import { AgentsList } from "./components/AgentsList";
 import { AgentDetail } from "./components/AgentDetail";
 import { ConfigBuilder } from "./components/ConfigBuilder";
 import { Login } from "./components/Login";
-import { clearToken, getToken } from "./api/client";
+import { clearCredential, getCredential } from "./api/client";
 import { useFleetData } from "./hooks/useFleetData";
 import { deriveProblems } from "./problems";
 
@@ -22,7 +22,7 @@ function initialTheme(): Theme {
 }
 
 export function App() {
-  const [authed, setAuthed] = useState(() => getToken() !== null);
+  const [authed, setAuthed] = useState(() => getCredential() !== null);
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [view, setView] = useState<View>("fleets");
   const [namespaceFilter, setNamespaceFilter] = useState<string | null>(null);
@@ -32,7 +32,7 @@ export function App() {
   // Fetched once here and shared by every fleet-wide view (Overview, Alerts,
   // AgentsList, and the sidebar's alert badge) instead of each polling
   // independently -- see hooks/useFleetData.ts.
-  const { agents, namespaces, loading, error } = useFleetData();
+  const { agents, namespaces, loading, error } = useFleetData(authed);
   const problems = useMemo(() => deriveProblems(agents), [agents]);
 
   useEffect(() => {
@@ -55,7 +55,7 @@ export function App() {
   }
 
   function logout() {
-    clearToken();
+    clearCredential();
     setAuthed(false);
   }
 

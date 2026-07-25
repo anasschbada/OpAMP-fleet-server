@@ -70,6 +70,30 @@ func TestLoad_TLSMustBeBothOrNeither(t *testing.T) {
 	}
 }
 
+func TestLoad_BasicAuthMustBeBothOrNeither(t *testing.T) {
+	env := baseEnv()
+	env["BASIC_AUTH_USERNAME_FILE"] = "/basic-auth/username"
+	// BASIC_AUTH_PASSWORD_FILE deliberately left unset
+	if _, err := Load(envMap(env)); err == nil {
+		t.Fatal("expected an error when only BASIC_AUTH_USERNAME_FILE is set")
+	}
+
+	env["BASIC_AUTH_PASSWORD_FILE"] = "/basic-auth/password"
+	if _, err := Load(envMap(env)); err != nil {
+		t.Fatalf("unexpected error with both basic auth files set: %v", err)
+	}
+}
+
+func TestLoad_BasicAuthUnsetByDefault(t *testing.T) {
+	cfg, err := Load(envMap(baseEnv()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.BasicAuthUsernameFile != "" || cfg.BasicAuthPasswordFile != "" {
+		t.Error("basic auth files should be empty (disabled) when not configured")
+	}
+}
+
 func TestLoad_DisconnectedAfterMustExceedStaleAfter(t *testing.T) {
 	env := baseEnv()
 	env["STALE_AFTER"] = "90s"

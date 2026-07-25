@@ -66,6 +66,9 @@ spec:
             - name: api-tokens
               mountPath: /etc/opamp-server/api-tokens
               readOnly: true
+            # - name: basic-auth
+            #   mountPath: /etc/opamp-server/basic-auth
+            #   readOnly: true
             # - name: tls
             #   mountPath: /etc/opamp-server/tls
             #   readOnly: true
@@ -100,6 +103,9 @@ spec:
         - name: api-tokens
           secret:
             secretName: opamp-server-api-tokens
+        # - name: basic-auth
+        #   secret:
+        #     secretName: opamp-server-basic-auth
         # - name: tls
         #   secret:
         #     secretName: opamp-server-tls

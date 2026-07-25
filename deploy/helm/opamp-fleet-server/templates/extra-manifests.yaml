@@ -1,0 +1,14 @@
+{{/*
+Renders arbitrary extra manifests from .Values.extraManifests as part of
+this release -- e.g. an Ingress/IngressRoute in front of the two Services
+this chart creates (none is templated here, see README.md's networking
+section for why), a PrometheusRule, or anything else specific to your
+cluster that doesn't belong in this chart itself. Each entry is passed
+through `tpl`, so it can reference chart values/helpers
+(e.g. {{ include "opamp-fleet-server.fullname" $ }}) the same way the
+chart's own templates do.
+*/}}
+{{- range .Values.extraManifests }}
+---
+{{ tpl (toYaml .) $ }}
+{{- end }}

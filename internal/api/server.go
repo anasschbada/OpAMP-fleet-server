@@ -40,10 +40,11 @@ type Server struct {
 // metricsStore may be nil, in which case the metrics endpoint always
 // responds with an empty snapshot (see handleGetAgentMetrics). tokens must
 // be the API-scoped token set (internal/config.Config.APIAuthTokensFile),
-// never the OpAMP agent set. ctx bounds the rate limiter's background
-// cleanup goroutine -- cancel it on shutdown, same as the rest of the
-// server's background loops.
-func NewHandler(ctx context.Context, st store.Store, opamp *opampserver.Handler, metricsStore *metrics.Store, tokens *auth.TokenVerifier, log *slog.Logger) http.Handler {
+// never the OpAMP agent set. basicAuth may be nil to disable the optional
+// HTTP Basic Auth login path entirely (see withAuth). ctx bounds the rate
+// limiter's background cleanup goroutine -- cancel it on shutdown, same as
+// the rest of the server's background loops.
+func NewHandler(ctx context.Context, st store.Store, opamp *opampserver.Handler, metricsStore *metrics.Store, tokens *auth.TokenVerifier, basicAuth *auth.BasicAuthVerifier, log *slog.Logger) http.Handler {
 	s := &Server{store: st, opamp: opamp, metrics: metricsStore, log: log}
 
 	limiter := ratelimit.NewFailureLimiter(maxAuthFailures, authFailureWindow)
@@ -61,7 +62,7 @@ func NewHandler(ctx context.Context, st store.Store, opamp *opampserver.Handler,
 	api.HandleFunc("GET /api/v1/agents/{uid}/metrics", s.handleGetAgentMetrics)
 	api.HandleFunc("GET /api/v1/namespaces", s.handleListNamespaces)
 	api.HandleFunc("GET /api/v1/component-catalog", s.handleComponentCatalog)
-	mux.Handle("/api/v1/", withAuth(tokens, limiter, log, api))
+	mux.Handle("/api/v1/", withAuth(tokens, basicAuth, limiter, log, api))
 
 	return withRecover(log, withSecurityHeaders(withLogging(log, mux)))
 }

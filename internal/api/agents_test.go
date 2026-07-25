@@ -57,7 +57,7 @@ func newTestServer(t *testing.T) *testServer {
 	opampHandler := opampserver.NewHandler(st, agentTokens, log)
 	metricsStore := metrics.NewStore()
 
-	handler := NewHandler(context.Background(), st, opampHandler, metricsStore, apiTokens, log)
+	handler := NewHandler(context.Background(), st, opampHandler, metricsStore, apiTokens, nil, log)
 	return &testServer{handler: handler, st: st, apiToken: "test-api-token", agentTok: "test-agent-token"}
 }
 

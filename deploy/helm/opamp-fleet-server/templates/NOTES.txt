@@ -5,11 +5,33 @@ Server (OpAMP + REST API):
   OpAMP endpoint (for collector configs): ws://{{ include "opamp-fleet-server.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.opampListenPort }}/v1/opamp
   REST API: http://{{ include "opamp-fleet-server.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.apiListenPort }}
 
+{{- if and (not .Values.auth.agentTokens.existingSecret) (not .Values.auth.agentTokens.tokens) }}
+
+An agent token was auto-generated for you (stable across upgrades, never
+rotated silently -- see values.yaml's auth.agentTokens comment):
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "opamp-fleet-server.agentTokensSecretName" . }} -o jsonpath='{.data.tokens\.txt}' | base64 -d
+{{- end }}
+{{- if and (not .Values.auth.apiTokens.existingSecret) (not .Values.auth.apiTokens.tokens) }}
+
+An API token was auto-generated for you (stable across upgrades):
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "opamp-fleet-server.apiTokensSecretName" . }} -o jsonpath='{.data.tokens\.txt}' | base64 -d
+{{- end }}
+{{- if .Values.auth.basicAuth.enabled }}
+
+HTTP Basic Auth is also enabled as an alternative UI login method (in
+addition to, not instead of, API tokens):
+  Username: {{ .Values.auth.basicAuth.username | default "admin" }}
+{{- if and (not .Values.auth.basicAuth.existingSecret) (not .Values.auth.basicAuth.password) }}
+  Password was auto-generated (stable across upgrades):
+    kubectl -n {{ .Release.Namespace }} get secret {{ include "opamp-fleet-server.basicAuthSecretName" . }} -o jsonpath='{.data.password}' | base64 -d
+{{- end }}
+{{- end }}
+
 {{- if .Values.ui.enabled }}
 
 Fleet UI:
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "opamp-fleet-server.ui.fullname" . }} 8081:{{ .Values.ui.servicePort }}
-  Then open http://localhost:8081 and enter one of your API tokens.
+  Then open http://localhost:8081 and log in with an API token{{ if .Values.auth.basicAuth.enabled }} or the Basic Auth username/password above{{ end }}.
 {{- else }}
 
 UI disabled (ui.enabled=false) -- deploy it separately, or set ui.enabled=true and upgrade.
