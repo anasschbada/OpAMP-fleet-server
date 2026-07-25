@@ -36,6 +36,12 @@ function baseUrl(): string {
   return window.__OPAMP_CONFIG__?.apiBaseUrl ?? "";
 }
 
+// Exposed for display purposes (e.g. the sidebar's account popover) --
+// shows same-origin explicitly rather than leaving it blank.
+export function apiBaseUrl(): string {
+  return baseUrl() || window.location.origin;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,

@@ -1,7 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { listAgents } from "../api/endpoints";
+import { useMemo, useState } from "react";
 import type { Agent } from "../types";
-import { ApiError } from "../api/client";
 import {
   connectionBadgeClass,
   connectionLabel,
@@ -10,36 +8,21 @@ import {
   relativeTime,
 } from "../format";
 
+// Consumes the fleet-wide agents list fetched once in App.tsx (see
+// hooks/useFleetData.ts) instead of polling on its own -- this page and
+// Overview/Alerts all read the same data so they can't drift apart.
 export function AgentsList({
+  agents,
   initialNamespace,
   onOpenAgent,
 }: {
+  agents: Agent[];
   initialNamespace: string | null;
   onOpenAgent: (uid: string) => void;
 }) {
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [namespace, setNamespace] = useState(initialNamespace ?? "");
   const [status, setStatus] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const a = await listAgents();
-        if (!cancelled) setAgents(a);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof ApiError ? e.message : "Erreur de chargement.");
-      }
-    }
-    load();
-    const id = setInterval(load, 10_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
 
   const namespaces = useMemo(() => Array.from(new Set(agents.map((a) => a.namespace).filter(Boolean))).sort(), [agents]);
 
@@ -61,8 +44,6 @@ export function AgentsList({
         </h1>
         <p>{agents.length} collecteur(s) connu(s).</p>
       </div>
-
-      {error && <div className="error-banner">{error}</div>}
 
       <div className="filter-row">
         <input
