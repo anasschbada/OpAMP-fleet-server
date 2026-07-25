@@ -59,6 +59,17 @@ func run() error {
 		return fmt.Errorf("load api auth tokens: %w", err)
 	}
 
+	// Optional, additive: a caller may present this HTTP Basic Auth
+	// username/password instead of an API bearer token. nil (disabled)
+	// when unconfigured -- see internal/config.Config's field comment.
+	var basicAuth *auth.BasicAuthVerifier
+	if cfg.BasicAuthUsernameFile != "" {
+		basicAuth, err = auth.NewBasicAuthVerifier(cfg.BasicAuthUsernameFile, cfg.BasicAuthPasswordFile)
+		if err != nil {
+			return fmt.Errorf("load basic auth credential: %w", err)
+		}
+	}
+
 	st, err := store.NewSQLiteStore(filepath.Join(cfg.DataDir, "fleet.db"))
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
@@ -88,6 +99,9 @@ func run() error {
 
 	agentTokens.StartAutoReload(ctx, authTokenReloadInterval, log)
 	apiTokens.StartAutoReload(ctx, authTokenReloadInterval, log)
+	if basicAuth != nil {
+		basicAuth.StartAutoReload(ctx, authTokenReloadInterval, log)
+	}
 	opampHandler.StartAuthLimiterCleanup(ctx, authLimiterCleanupPeriod)
 	go opampserver.RunStaleSweeper(ctx, st, cfg.StaleAfter, cfg.DisconnectedAfter, log)
 
@@ -101,7 +115,7 @@ func run() error {
 	opampErrCh := serve(opampHTTPServer, tlsConfig != nil)
 	log.Info("opamp listener started", "addr", cfg.OpAMPListenAddr, "tls", tlsConfig != nil)
 
-	restHandler := api.NewHandler(ctx, st, opampHandler, metricsStore, apiTokens, log)
+	restHandler := api.NewHandler(ctx, st, opampHandler, metricsStore, apiTokens, basicAuth, log)
 	restServer := &http.Server{
 		Addr:              cfg.APIListenAddr,
 		Handler:           restHandler,

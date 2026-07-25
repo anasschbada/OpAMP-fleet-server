@@ -46,6 +46,17 @@ type Config struct {
 	AgentAuthTokensFile string
 	APIAuthTokensFile   string
 
+	// BasicAuthUsernameFile / BasicAuthPasswordFile enable an OPTIONAL,
+	// ADDITIONAL way to authenticate to the REST API: a caller may present
+	// either a valid API bearer token (above) or this single HTTP Basic
+	// Auth username/password pair -- see internal/auth.BasicAuthVerifier
+	// and internal/api's withAuth. This never affects the OpAMP agent
+	// channel, and never replaces the agent/API token separation above.
+	// Leave both unset to disable basic auth entirely (the default); set
+	// both together or not at all.
+	BasicAuthUsernameFile string
+	BasicAuthPasswordFile string
+
 	// DataDir is where the SQLite database file lives. Must be a writable,
 	// persistent path (a PersistentVolumeClaim mount in Kubernetes).
 	DataDir string
@@ -66,14 +77,16 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 
 	cfg := Config{
-		OpAMPListenAddr:     orDefault(getenv("OPAMP_LISTEN_ADDR"), ":4320"),
-		APIListenAddr:       orDefault(getenv("API_LISTEN_ADDR"), ":8080"),
-		TLSCertFile:         getenv("TLS_CERT_FILE"),
-		TLSKeyFile:          getenv("TLS_KEY_FILE"),
-		AgentAuthTokensFile: getenv("AGENT_AUTH_TOKENS_FILE"),
-		APIAuthTokensFile:   getenv("API_AUTH_TOKENS_FILE"),
-		DataDir:             orDefault(getenv("DATA_DIR"), "/data"),
-		LogLevel:            orDefault(getenv("LOG_LEVEL"), "info"),
+		OpAMPListenAddr:       orDefault(getenv("OPAMP_LISTEN_ADDR"), ":4320"),
+		APIListenAddr:         orDefault(getenv("API_LISTEN_ADDR"), ":8080"),
+		TLSCertFile:           getenv("TLS_CERT_FILE"),
+		TLSKeyFile:            getenv("TLS_KEY_FILE"),
+		AgentAuthTokensFile:   getenv("AGENT_AUTH_TOKENS_FILE"),
+		APIAuthTokensFile:     getenv("API_AUTH_TOKENS_FILE"),
+		BasicAuthUsernameFile: getenv("BASIC_AUTH_USERNAME_FILE"),
+		BasicAuthPasswordFile: getenv("BASIC_AUTH_PASSWORD_FILE"),
+		DataDir:               orDefault(getenv("DATA_DIR"), "/data"),
+		LogLevel:              orDefault(getenv("LOG_LEVEL"), "info"),
 	}
 
 	staleAfter, err := parseDurationOrDefault(getenv("STALE_AFTER"), 30*time.Second)
@@ -107,6 +120,9 @@ func (c Config) validate() error {
 	}
 	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
 		return fmt.Errorf("TLS_CERT_FILE and TLS_KEY_FILE must both be set, or both left empty")
+	}
+	if (c.BasicAuthUsernameFile == "") != (c.BasicAuthPasswordFile == "") {
+		return fmt.Errorf("BASIC_AUTH_USERNAME_FILE and BASIC_AUTH_PASSWORD_FILE must both be set, or both left empty")
 	}
 	if c.StaleAfter <= 0 || c.DisconnectedAfter <= c.StaleAfter {
 		return fmt.Errorf("DISCONNECTED_AFTER must be greater than STALE_AFTER, both must be positive")

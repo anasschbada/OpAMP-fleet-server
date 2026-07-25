@@ -63,6 +63,11 @@ spec:
             - name: api-tokens
               mountPath: /etc/opamp-server/api-tokens
               readOnly: true
+            {{- if .Values.auth.basicAuth.enabled }}
+            - name: basic-auth
+              mountPath: /etc/opamp-server/basic-auth
+              readOnly: true
+            {{- end }}
             {{- if .Values.tls.enabled }}
             - name: tls
               mountPath: /etc/opamp-server/tls
@@ -101,6 +106,11 @@ spec:
         - name: api-tokens
           secret:
             secretName: {{ include "opamp-fleet-server.apiTokensSecretName" . }}
+        {{- if .Values.auth.basicAuth.enabled }}
+        - name: basic-auth
+          secret:
+            secretName: {{ include "opamp-fleet-server.basicAuthSecretName" . }}
+        {{- end }}
         {{- if .Values.tls.enabled }}
         - name: tls
           secret:

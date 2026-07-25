@@ -1,117 +1,105 @@
-# OpAMP Fleet Server
+# 🛰️ OpAMP Fleet Server
 
-Un serveur [OpAMP](https://github.com/open-telemetry/opamp-spec) + une UI web
-pour piloter une flotte de collecteurs **OpenTelemetry** (n'importe quelle
-distribution) depuis un seul endroit : qui est en vie, quelle config tourne
-sur chaque collecteur, et pousser une nouvelle config à la volée.
+[![CI](https://github.com/anasschbada/opamp-fleet-server/actions/workflows/ci.yml/badge.svg)](https://github.com/anasschbada/opamp-fleet-server/actions/workflows/ci.yml)
+[![Helm chart release](https://github.com/anasschbada/opamp-fleet-server/actions/workflows/helm-release.yml/badge.svg)](https://github.com/anasschbada/opamp-fleet-server/actions/workflows/helm-release.yml)
 
-Pensé pour tourner sur un cluster Kubernetes **sans droits admin** : le
-serveur ne crée ni n'utilise aucun `ClusterRole`. Détail complet dans
+An [OpAMP](https://github.com/open-telemetry/opamp-spec) server + web UI for
+managing a fleet of **OpenTelemetry Collectors** — any distribution — from
+one place: who's alive, what config is running where, and pushing a new
+config on the fly.
+
+Built to run on a Kubernetes cluster **with zero admin rights**: the server
+never creates or needs a `ClusterRole`. Full details in
 [`docs/RBAC.md`](docs/RBAC.md).
 
-## Comment ça marche
+![Fleet Overview page, example data](docs/img/overview-ui.png)
+<sub>Example data, not a real deployment.</sub>
 
-```
-Collecteurs OTel ──OpAMP/WebSocket:4320──► opamp-server ──REST:8080──► UI React
-(dans vos namespaces)                      (registre SQLite)
-```
+## ✨ What you get
 
-1. **Chaque collecteur s'auto-décrit** au serveur via le protocole OpAMP
-   (identité, santé, config effective) — le serveur ne fait jamais d'appel à
-   l'API Kubernetes pour savoir qui existe.
-2. **Le serveur garde tout en base** (SQLite) : liste des agents, dernière
-   config connue, historique des configs poussées.
-3. **L'UI REST** lit ce registre et permet de pousser une nouvelle config à
-   un agent ; le push repart sur le même canal WebSocket OpAMP, jamais via
-   une modification de `ConfigMap`.
-4. **Deux jetons séparés** protègent les deux canaux : un jeton "agent" pour
-   le WebSocket OpAMP, un jeton "API" pour la REST/UI. Un pod collecteur
-   compromis ne peut donc pas se servir de son jeton pour piloter les autres
-   agents via l'API. Détail dans [`docs/SECURITY.md`](docs/SECURITY.md).
-5. **Métriques optionnelles** : si un collecteur expose son port
-   d'auto-télémétrie Prometheus, le serveur le scrape — uniquement sur l'IP
-   déjà authentifiée de ce collecteur (pas d'adresse arbitraire, protection
-   anti-SSRF).
+- 🔭 **One registry for the whole fleet** — every collector self-reports
+  its identity, health, and effective config over OpAMP; the server never
+  calls the Kubernetes API to figure out who exists.
+- ⚡ **Push config live** — no `ConfigMap` edit, no pod restart. A push
+  goes back down the same OpAMP WebSocket the agent is already connected on.
+- 🔐 **Two auth boundaries, on purpose** — a collector's token can never be
+  used to call the REST API. See [why](#-authentication) below.
+- 🖥️ **A real UI**, not a dashboard afterthought — namespace health, alerts
+  derived from live agent state, a command palette (⌘K), light/dark theme.
+- 📦 **Ships as raw manifests or a Helm chart** — pick whichever fits your
+  GitOps setup; both are equivalent.
+- 🕵️ **No RBAC, no telemetry, no phone-home** — see
+  [`docs/RBAC.md`](docs/RBAC.md) and [`docs/SECURITY.md`](docs/SECURITY.md).
 
-## Structure du projet
+## 🧭 How it fits together
 
-```
-.
-├── cmd/
-│   ├── opamp-server/       serveur principal (OpAMP + API REST)
-│   └── fleet-ui-server/    petit serveur de fichiers statiques pour l'UI
-├── internal/
-│   ├── opampserver/        protocole OpAMP : handshake, push de config, registre en mémoire
-│   ├── api/                API REST consommée par l'UI (routes, DTO, middlewares)
-│   ├── auth/                lecture/validation des jetons agent et API
-│   ├── ratelimit/          limite les tentatives d'auth échouées par IP
-│   ├── store/              persistance (SQLite et mémoire, même interface)
-│   ├── metrics/            scraping optionnel des métriques d'auto-télémétrie
-│   └── config/             lecture de la config serveur (variables d'env)
-├── ui/                     UI React + TypeScript (Vite)
-├── deploy/
-│   ├── k8s/                manifestes Kubernetes bruts (sans Helm)
-│   └── helm/               chart Helm équivalent
-├── docs/                   RBAC, sécurité, avis de prod-readiness
-├── Dockerfile              image du serveur (opamp-server)
-├── ui/Dockerfile           image de l'UI (fleet-ui-server)
-└── .github/workflows/      CI : build/test/scan, images Docker, chart Helm
+```mermaid
+flowchart LR
+    subgraph Collectors["Your namespaces"]
+        C1[OTel Collector]
+        C2[OTel Collector]
+        C3[OTel Collector]
+    end
+
+    subgraph Server["opamp-server"]
+        OPAMP["OpAMP endpoint :4320<br/>(WebSocket)"]
+        API["REST API :8080"]
+        DB[(SQLite<br/>fleet registry)]
+        OPAMP <--> DB
+        API <--> DB
+    end
+
+    UI["Fleet UI :8081<br/>(static, runs in your browser)"]
+
+    C1 <-- "agent token" --> OPAMP
+    C2 <-- "agent token" --> OPAMP
+    C3 <-- "agent token" --> OPAMP
+    UI -- "API token or Basic Auth" --> API
 ```
 
-Détail des dossiers :
+1. **Each collector self-describes** to the server over OpAMP (identity,
+   health, effective config) — never a Kubernetes API call.
+2. **The server keeps a registry in SQLite**: agents, their last known
+   config, and config-push history.
+3. **The REST API** reads that registry and lets you push a new config to
+   an agent; the push travels back over the same OpAMP WebSocket.
+4. **Two separate credentials** guard the two channels — see below.
+5. **Metrics scraping is optional**: if a collector exposes its own
+   Prometheus self-telemetry port, the server scrapes *only* the already-
+   authenticated IP of that exact collector (no arbitrary address — an
+   anti-SSRF guardrail, not a feature toggle you can point elsewhere).
 
-- **`cmd/opamp-server`** : point d'entrée du serveur — démarre le canal
-  OpAMP (agents) et l'API REST (UI), ouvre le stockage SQLite.
-- **`cmd/fleet-ui-server`** : sert le build statique de `ui/` en Go pur (pas
-  de nginx), pour garder le même profil de dépendances/CVE que le serveur.
-- **`internal/opampserver`** : implémentation du protocole OpAMP côté
-  serveur — handshake, health, config effective, push de remote config,
-  nettoyage des agents déconnectés (`sweeper.go`).
-- **`internal/api`** : les routes REST utilisées par l'UI (liste des
-  agents, catalogue de composants, push de config) et leurs middlewares
-  (auth, logging).
-- **`internal/auth`** : parsing et validation des deux fichiers de jetons
-  (agent / API).
-- **`internal/ratelimit`** : limiteur de débit par IP sur les échecs
-  d'authentification (10/minute, au-delà 429).
-- **`internal/store`** : interface de stockage du registre d'agents, avec
-  deux implémentations (SQLite pour la prod, mémoire pour les tests).
-- **`internal/metrics`** : parsing et scraping des métriques Prometheus
-  d'auto-télémétrie exposées par les collecteurs (optionnel).
-- **`internal/config`** : lecture de la configuration serveur depuis les
-  variables d'environnement.
-- **`ui/`** : UI React + TypeScript (Vite) — connectée à l'API REST
-  ci-dessus, pas de données mockées.
-- **`deploy/k8s`** : manifestes Kubernetes prêts à `kubectl apply`, sans
-  Helm ni Kustomize.
-- **`deploy/helm/opamp-fleet-server`** : chart Helm équivalent aux
-  manifestes bruts (voir son propre README pour les valeurs).
-- **`docs/RBAC.md`** : pourquoi aucun `ClusterRole` n'est nécessaire.
-- **`docs/SECURITY.md`** : résultats des scans de sécurité (gosec,
-  gitleaks, npm audit, pentest manuel).
-- **`docs/PRODUCTION_READINESS.md`** : ce qui est prêt pour la prod et ce
-  qui ne l'est pas encore.
-- **`.github/workflows/`** : voir la section [CI/CD](#cicd) plus bas.
+## 🔐 Authentication
 
-## Prérequis
+### Two token pools, never one
 
-- **Go 1.24+** et **Node.js 22+** pour builder localement.
-- **Docker** pour construire les images (voir `Dockerfile` et
-  `ui/Dockerfile`). En cluster airgapped, mirrorez d'abord les images de
-  base dans votre registre interne (voir les commentaires en tête de
-  chaque Dockerfile).
-- **Un cluster Kubernetes** où vous pouvez créer des ressources namespaced
-  standard (Deployment, Service, ConfigMap, Secret, PVC, NetworkPolicy) —
-  **aucun droit cluster-admin requis**.
-- **Une StorageClass** pour la PVC du registre SQLite (2Gi par défaut, voir
-  `deploy/k8s/platform/02-pvc.yaml`).
-- **Un jeton bearer** que vous générez vous-même (`openssl rand -base64
-  32`) pour authentifier agents et UI — pas de SSO/OIDC intégré.
+Collectors (OpAMP channel) and the UI/operators (REST API) use **two
+separate token pools** (`AGENT_AUTH_TOKENS_FILE` / `API_AUTH_TOKENS_FILE`).
+The server **refuses to start** if both env vars point at the same file.
 
-## Démarrage en local (développement)
+Why it matters: a collector only ever needs to hold an OpAMP connection. If
+it also held a valid API token, one compromised collector pod could push a
+malicious config to *every other agent in the fleet* through the REST API.
+Splitting the pools confines the blast radius of a single compromised pod
+to "this collector has a rogue OpAMP session," never "the whole fleet is
+pilotable."
+
+### Optional: HTTP Basic Auth as a second login method
+
+The REST API/UI can *additionally* accept a single HTTP Basic Auth
+username/password (`BASIC_AUTH_USERNAME_FILE` / `BASIC_AUTH_PASSWORD_FILE`)
+— off by default, and never a replacement for the API token pool. Useful
+if you'd rather hand operators a memorable login than a bearer token.
+Enable it with `auth.basicAuth.enabled=true` in the Helm chart, or the two
+env vars directly (see `internal/config.Config`'s field comment).
+
+Every failed attempt against either credential is throttled per source IP
+(10 failures/minute → 429) and logged — see `internal/ratelimit`.
+
+## 🚀 Local development
 
 ```bash
-# Serveur -- deux fichiers de jetons SÉPARÉS (voir "Sécurité" plus haut)
+# Server -- two SEPARATE token files (see "Authentication" above)
 export AGENT_AUTH_TOKENS_FILE=/tmp/agent-tokens.txt
 export API_AUTH_TOKENS_FILE=/tmp/api-tokens.txt
 echo "dev-agent-token" > /tmp/agent-tokens.txt
@@ -120,123 +108,205 @@ export DATA_DIR=/tmp/opamp-dev
 mkdir -p $DATA_DIR
 go run ./cmd/opamp-server
 
-# UI (dans un autre terminal)
+# UI (separate terminal)
 cd ui
 npm install
 npm run dev
 ```
 
-Ouvrez l'UI (URL affichée par `npm run dev`), entrez `dev-api-token` comme
-jeton d'accès.
+Open the UI at the URL `npm run dev` prints, and log in with `dev-api-token`.
 
-## Déploiement Kubernetes
+## ☸️ Kubernetes deployment
+
+### Option A: Helm (generates your tokens for you)
+
+```bash
+helm install my-fleet ./deploy/helm/opamp-fleet-server \
+  --namespace opamp-system --create-namespace \
+  --set server.image.repository=YOUR_REGISTRY/opamp-fleet-server \
+  --set ui.image.repository=YOUR_REGISTRY/opamp-fleet-ui
+```
+
+No token files to prepare first: leave `auth.agentTokens`/`auth.apiTokens`
+at their defaults and the chart **generates a random token for each pool**,
+prints how to retrieve it in the post-install notes, and keeps it **stable
+across `helm upgrade`** (never silently rotated — see
+`templates/secret-agent-tokens.yaml`). Bring your own tokens/Secrets, turn
+on the optional Basic Auth login, or attach an `extraManifests` entry (e.g.
+an Ingress) — see [`deploy/helm/opamp-fleet-server/README.md`](deploy/helm/opamp-fleet-server/README.md)
+for all of it. The chart is also published as a GitHub Release, see
+[CI/CD](#-cicd) below.
+
+### Option B: raw manifests
 
 ```bash
 kubectl apply -f deploy/k8s/platform/01-serviceaccount.yaml
 kubectl apply -f deploy/k8s/platform/02-pvc.yaml
 kubectl apply -f deploy/k8s/platform/03-configmap.yaml
-# Générez de vrais jetons avant d'appliquer -- voir le commentaire dans chaque fichier :
+# Generate real tokens before applying -- see the comment in each file:
 kubectl apply -f deploy/k8s/platform/04-secret-agent-tokens.example.yaml
 kubectl apply -f deploy/k8s/platform/05-secret-api-tokens.example.yaml
 kubectl apply -f deploy/k8s/platform/07-deployment.yaml
 kubectl apply -f deploy/k8s/platform/08-service.yaml
 kubectl apply -f deploy/k8s/platform/09-networkpolicy.yaml
 
-# L'UI (jamais déployée sans ça)
+# The UI (never skip this)
 kubectl apply -f deploy/k8s/platform/10-ui-serviceaccount.yaml
 kubectl apply -f deploy/k8s/platform/11-ui-deployment.yaml
 kubectl apply -f deploy/k8s/platform/12-ui-service.yaml
 kubectl apply -f deploy/k8s/platform/13-ui-networkpolicy.yaml
+# Optional: 14-secret-basicauth.example.yaml, see its own comment
 ```
 
-(`00-namespace.yaml` est optionnel — voir son commentaire si vous n'avez pas
-le droit de créer des namespaces vous-même.)
+(`00-namespace.yaml` is optional — see its comment if you can't create
+namespaces yourself.)
 
-Puis, pour chaque namespace applicatif dont vous voulez piloter les
-collecteurs, adaptez les manifestes dans `deploy/k8s/collector-examples/`
-(voir son README) — utilisez un jeton **agent**, jamais celui de l'API.
+Then, for every application namespace whose collectors you want to manage,
+adapt the manifests in `deploy/k8s/collector-examples/` (see its own
+README) — use an **agent** token, never the API one.
 
-### Avec Helm (alternative aux manifestes bruts)
+### Networking: one Ingress, not two
 
-```bash
-helm install my-fleet ./deploy/helm/opamp-fleet-server \
-  --namespace opamp-system --create-namespace \
-  --set server.image.repository=YOUR_REGISTRY/opamp-fleet-server \
-  --set ui.image.repository=YOUR_REGISTRY/opamp-fleet-ui \
-  --set auth.agentTokens.existingSecret=my-agent-tokens \
-  --set auth.apiTokens.existingSecret=my-api-tokens
+The server (`:8080`) and the UI (`:8081`) are separate Services on
+purpose (see [why both listen on different ports](#-how-it-fits-together)
+above), but that doesn't mean you need two Ingress objects. The UI already
+assumes **same-origin, path-based routing** by default (no `API_BASE_URL`
+configured): route `/api/*` to the server Service and `/` to the UI
+Service, both under **one** Ingress/IngressRoute on one host.
+
+Splitting them across two hostnames instead works too, but then you must
+also set `API_BASE_URL` (`ui.apiBaseUrl` in the Helm chart) **and** add
+CORS support server-side — this server ships with **no CORS headers by
+design** (see `TestAPI_NoCORSHeadersByDefault`), so a cross-origin split
+needs a code change first.
+
+## 📁 Project layout
+
+```
+.
+├── cmd/
+│   ├── opamp-server/       main server (OpAMP + REST API)
+│   └── fleet-ui-server/    tiny static file server for the UI
+├── internal/
+│   ├── opampserver/        OpAMP protocol: handshake, config push, in-memory registry
+│   ├── api/                REST API consumed by the UI (routes, DTOs, middleware)
+│   ├── auth/                agent/API token + optional Basic Auth verification
+│   ├── ratelimit/          per-IP throttling for failed auth attempts
+│   ├── store/               persistence (SQLite and in-memory, same interface)
+│   ├── metrics/             optional self-telemetry scraping
+│   └── config/               server config from environment variables
+├── ui/                      React + TypeScript UI (Vite)
+├── deploy/
+│   ├── k8s/                raw Kubernetes manifests (no Helm)
+│   └── helm/                equivalent Helm chart
+├── docs/                    RBAC, security, production-readiness notes
+├── Dockerfile                server image (opamp-server)
+├── ui/Dockerfile             UI image (fleet-ui-server)
+└── .github/workflows/        CI: build/test/scan, Docker images, Helm chart
 ```
 
-Voir `deploy/helm/opamp-fleet-server/README.md` pour le détail des valeurs.
-Le chart est aussi publié automatiquement en release GitHub, voir plus bas.
+<details>
+<summary>Directory-by-directory notes</summary>
 
-## CI/CD
+- **`cmd/opamp-server`** — entry point: starts the OpAMP channel (agents)
+  and the REST API (UI), opens the SQLite store.
+- **`cmd/fleet-ui-server`** — serves `ui/`'s static build in pure Go (no
+  nginx), to keep the same dependency/CVE profile as the main server.
+- **`internal/opampserver`** — server-side OpAMP protocol implementation:
+  handshake, health, effective config, remote config push, stale-agent
+  sweeping (`sweeper.go`).
+- **`internal/api`** — REST routes the UI uses (agent list, component
+  catalog, config push) and their middleware (auth, logging).
+- **`internal/auth`** — parses/validates the two token files and the
+  optional Basic Auth credential.
+- **`internal/ratelimit`** — per-IP rate limiter on failed auth attempts
+  (10/minute, 429 beyond that).
+- **`internal/store`** — fleet registry storage interface, two
+  implementations (SQLite for prod, in-memory for tests).
+- **`internal/metrics`** — parses/scrapes optional Prometheus
+  self-telemetry exposed by collectors.
+- **`internal/config`** — reads server configuration from environment
+  variables.
+- **`ui/`** — React + TypeScript UI (Vite), talks to the REST API above,
+  no mocked data.
+- **`deploy/k8s`** — manifests ready for `kubectl apply`, no Helm/Kustomize.
+- **`deploy/helm/opamp-fleet-server`** — Helm chart equivalent to the raw
+  manifests (see its own README for values).
+- **`docs/RBAC.md`** — why no `ClusterRole` is ever needed.
+- **`docs/SECURITY.md`** — security scan results (gosec, gitleaks, npm
+  audit, manual pentest).
+- **`docs/PRODUCTION_READINESS.md`** — an honest take on what's ready for
+  production and what isn't yet.
+- **`.github/workflows/`** — see [CI/CD](#-cicd) below.
 
-Trois workflows dans `.github/workflows/` :
+</details>
 
-- **`ci.yml`** — sur chaque push/PR : build/vet/test/gosec/govulncheck
-  (Go), build/typecheck/audit (UI), build des deux images Docker + scan
-  Trivy, validation des manifestes/chart avec kubeconform et `helm lint`.
-  Sur un tag `v*`, publie aussi les deux images sur **GHCR**
-  (`ghcr.io/<owner>/opamp-fleet-server` et `opamp-fleet-ui`) et sur
-  **Docker Hub** (`anasschb/images:opamp-fleet-server-<tag>` et
-  `anasschb/images:opamp-fleet-ui-<tag>`, plus un tag `-latest`).
-  Nécessite les secrets de repo `DOCKERHUB_USERNAME` et `DOCKERHUB_TOKEN`
-  (un [access token](https://hub.docker.com/settings/security) Docker Hub,
-  pas votre mot de passe).
-- **`helm-release.yml`** — sur chaque push sur `main` qui touche
-  `deploy/helm/**` : package le chart Helm et publie une **release
-  GitHub** contenant le `.tgz` (tag `opamp-fleet-server-<version du
-  Chart.yaml>`), et maintient un index Helm (`index.yaml`) sur la branche
-  `gh-pages`. Pour publier une nouvelle version du chart : bump
-  `version:` dans `deploy/helm/opamp-fleet-server/Chart.yaml` et pushez sur
-  `main`.
-- **`dependabot.yml`** — mises à jour automatiques des dépendances
-  (Go, npm, GitHub Actions, Docker).
+## 📋 Requirements
 
-Pour publier une nouvelle version des images : créez un tag `vX.Y.Z` et
-poussez-le (`git tag vX.Y.Z && git push origin vX.Y.Z`).
+- **Go 1.25+** and **Node.js 22+** to build locally.
+- **Docker** to build images (see `Dockerfile` and `ui/Dockerfile`). In an
+  airgapped cluster, mirror the base images into your internal registry
+  first — see the comment at the top of each Dockerfile.
+- **A Kubernetes cluster** where you can create standard namespaced
+  resources (Deployment, Service, ConfigMap, Secret, PVC, NetworkPolicy) —
+  **no cluster-admin required**.
+- **A StorageClass** for the SQLite registry's PVC (2Gi by default, see
+  `deploy/k8s/platform/02-pvc.yaml`).
+- No SSO/OIDC is built in — see [Authentication](#-authentication) above.
 
-## Sécurité : deux jetons, pas un seul
+## 🔁 CI/CD
 
-Les collecteurs (canal OpAMP) et l'UI/les opérateurs (API REST) utilisent
-**deux jeux de jetons séparés** (`AGENT_AUTH_TOKENS_FILE` /
-`API_AUTH_TOKENS_FILE`). Le serveur refuse de démarrer si les deux
-variables pointent vers le même fichier : un collecteur n'a besoin que
-d'ouvrir une connexion OpAMP — s'il partageait aussi le jeton API, un seul
-pod compromis pourrait pousser une configuration arbitraire à *tous* les
-autres agents via l'API REST.
+Two workflows in `.github/workflows/`:
 
-Les tentatives d'authentification échouées sont journalisées et limitées
-en débit par IP (10 échecs/minute, au-delà : 429) — voir
-`internal/ratelimit`.
+- **`ci.yml`** — on every push/PR: build/vet/test/gosec/govulncheck (Go),
+  build/typecheck/audit (UI), build both Docker images + Trivy scan,
+  validate manifests/chart with kubeconform and `helm lint`. On a `v*` tag,
+  also publishes both images to **GHCR**
+  (`ghcr.io/<owner>/opamp-fleet-server` and `opamp-fleet-ui`) and to
+  **Docker Hub** (`anasschb/images:opamp-fleet-server-<tag>` and
+  `opamp-fleet-ui-<tag>`, plus a `-latest` tag). Needs the repo secrets
+  `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Docker Hub
+  [access token](https://hub.docker.com/settings/security), not your
+  password).
+- **`helm-release.yml`** — on every push to `main` touching
+  `deploy/helm/**`: packages the chart and publishes a **GitHub Release**
+  with the `.tgz` (tag `opamp-fleet-server-<Chart.yaml version>`), and
+  maintains a Helm index (`index.yaml`) on the `gh-pages` branch. To ship a
+  new chart version: bump `version:` in
+  `deploy/helm/opamp-fleet-server/Chart.yaml` and push to `main`.
+- Dependabot keeps Go, npm, GitHub Actions, and Docker base image
+  dependencies current.
 
-## Tests / vérifications effectuées
+To publish a new image version: tag and push (`git tag vX.Y.Z && git push
+origin vX.Y.Z`).
 
-- `go build ./...`, `go vet ./...`, `gofmt -l .` : propre.
-- `go test ./... -race -cover` : toute la suite passe (auth, rate
-  limiting, validation de config, stockage, parsing des métriques, logique
-  OpAMP).
-- `gosec ./...` : 0 finding. `gitleaks` sur tout l'historique : aucun
-  secret trouvé. `npm audit` (UI) : 0 vulnérabilité.
-- Pentest manuel (path traversal, injection SQL, injection CRLF, corps
-  surdimensionnés, YAML malformé, CORS, rate limiting) : aucune faille
-  trouvée à part un bug mineur déjà corrigé. Voir `docs/SECURITY.md`.
-- `helm lint` + `helm template` + `kubeconform` sur le chart et les
-  manifestes bruts : tous valides.
-- `npm run build` + `tsc -b` pour l'UI : propre.
+## ✅ Tests / checks performed
 
-Voir `docs/PRODUCTION_READINESS.md` pour un avis honnête sur ce qui manque
-encore avant une prod à enjeux critiques (haute disponibilité, SSO, tests
-d'intégration bout-en-bout automatisés).
+- `go build ./...`, `go vet ./...`, `gofmt -l .` — clean.
+- `go test ./... -race -cover` — full suite passes (auth incl. Basic Auth,
+  rate limiting, config validation, storage, metrics parsing, OpAMP logic).
+- `gosec ./...` — 0 findings. `gitleaks` over the full history — no
+  secrets found. `npm audit` (UI) — 0 vulnerabilities.
+- Manual pentest (path traversal, SQL injection, CRLF injection,
+  oversized bodies, malformed YAML, CORS, rate limiting) — no issues found
+  beyond one minor bug already fixed. See `docs/SECURITY.md`.
+- `helm lint` + `helm template` + `kubeconform` on the chart and raw
+  manifests — all valid, including the new auto-generated-secret,
+  Basic Auth, and `extraManifests` paths.
+- `npm run build` + `tsc -b` for the UI — clean; the full login/navigation
+  flow (token login, Basic Auth login, namespace drill-down, command
+  palette, alerts) verified against a running dev server.
 
-## Simplifications assumées par rapport au prototype de design d'origine
+See [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) for an
+honest take on what's still missing before a high-stakes production
+rollout (high availability, SSO, automated end-to-end integration tests).
 
-L'UI réimplémente les 4 vues et le flux de push de config, mais simplifie
-deux aspects du prototype visuel d'origine : pas d'éditeur YAML type
-CodeMirror/Monaco (un `<textarea>` suffisamment fonctionnel), et le
-constructeur de pipeline n'offre pas encore l'édition en ligne du YAML par
-composant ni l'ajout de composants personnalisés. La logique de génération
-de config (union des composants par signal) et le tableau de composants
-sont génériques (n'importe quelle distribution OTel Collector), pas
-câblés en dur sur un vendor particulier.
+## 🎨 Simplifications vs. the original design prototype
+
+The UI reimplements all views and the config-push flow, but simplifies two
+things from the original visual prototype: no CodeMirror/Monaco-style YAML
+editor (a plain `<textarea>` is functional enough), and the pipeline
+builder doesn't yet offer per-component inline YAML editing or custom
+component entries. Config-generation logic (union of components per
+signal) and the component catalog are generic — any OTel Collector
+distribution, not hardcoded to one vendor.
