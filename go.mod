@@ -1,10 +1,10 @@
 module github.com/anasschbada/opamp-fleet-server
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/open-telemetry/opamp-go v0.23.0
+	github.com/open-telemetry/opamp-go v0.25.0
 	github.com/prometheus/client_model v0.6.1
 	github.com/prometheus/common v0.62.0
 	gopkg.in/yaml.v3 v3.0.1
